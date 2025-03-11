@@ -64,11 +64,12 @@ async def ask_gpt(user_message: str) -> str:
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Ты профессиональный AI-тренер, консультируешь по похудению, фитнесу и питанию."},
+            {"role": "system", "content": "Ты профессиональный AI-тренер, консультируешь по похудению, фитнесу и питанию. Отвечай кратко и структурированно. Не используй больше 1000 токенов."
+},
             {"role": "user", "content": user_message}
         ],
         temperature=0.5,
-        max_tokens=500
+        max_tokens=1000
     )
     return response.choices[0].message.content
 
