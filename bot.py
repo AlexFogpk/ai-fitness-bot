@@ -29,6 +29,36 @@ dp = Dispatcher()
 
 logging.basicConfig(level=logging.INFO)
 
+# ----------------------------------------------------------
+# 1. Функция разбивки длинного текста на части
+# ----------------------------------------------------------
+def split_message(text, max_length=4096):
+    """
+    Разбивает длинный текст на части, каждая из которых не превышает max_length символов.
+    Если возможно, разбивает по переносам строки, чтобы не рвать слово.
+    """
+    parts = []
+    while len(text) > max_length:
+        split_index = text.rfind("\n", 0, max_length)
+        if split_index == -1:
+            split_index = max_length
+        parts.append(text[:split_index])
+        text = text[split_index:].strip()
+    parts.append(text)
+    return parts
+
+# ----------------------------------------------------------
+# 2. Функция отправки сообщений по частям
+# ----------------------------------------------------------
+async def send_split_message(chat_id, text):
+    """
+    Отправляет длинное сообщение в чат, разбивая его на части,
+    чтобы каждая часть не превышала 4096 символов.
+    """
+    parts = split_message(text, max_length=4096)
+    for part in parts:
+        await bot.send_message(chat_id, part)
+
 # Ответ GPT-4o mini
 async def ask_gpt(user_message: str) -> str:
     response = await openai_client.chat.completions.create(
@@ -61,7 +91,11 @@ async def start(message: types.Message):
 async def handle_message(message: types.Message):
     await message.chat.do("typing")
     response = await ask_gpt(message.text)
-    await message.answer(response)
+    
+    # ----------------------------------------------------------
+    # 3. Вместо message.answer(response) отправляем сообщениями по частям
+    # ----------------------------------------------------------
+    await send_split_message(message.chat.id, response)
 
 async def main():
     await dp.start_polling(bot)
