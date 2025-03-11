@@ -1,5 +1,6 @@
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
+from aiogram.enums import ParseMode  # Добавляем импорт ParseMode
 import logging
 import asyncio
 import os
@@ -55,10 +56,6 @@ async def send_split_message(chat_id, text, parse_mode=None):
 # 3. Функция пост-обработки Markdown для оптимизации шрифта в Telegram
 # ----------------------------------------------------------
 def fix_markdown_telegram(text: str) -> str:
-    """
-    Заменяет заголовки в виде "### Заголовок" или "## Заголовок" на жирный текст.
-    Также можно добавить и другие замены по необходимости.
-    """
     lines = text.split("\n")
     new_lines = []
     for line in lines:
@@ -213,7 +210,7 @@ async def start(message: types.Message):
     await message.answer(
         f"Привет, {message.from_user.full_name}! 👋\n\n"
         "Я твой AI-тренер. Спроси меня о *питании*, _тренировках_, похудении, здоровье или спорте!",
-        parse_mode=types.ParseMode.MARKDOWN
+        parse_mode=ParseMode.MARKDOWN
     )
 
 # ----------------------------------------------------------
@@ -224,30 +221,13 @@ async def handle_message(message: types.Message):
     if not await is_fitness_question_combined(message.text):
         await message.answer(
             "Извини, я могу отвечать только на вопросы, связанные с фитнесом, тренировками, диетой, похудением, здоровьем и спортом.",
-            parse_mode=types.ParseMode.MARKDOWN
+            parse_mode=ParseMode.MARKDOWN
         )
         return
     await message.chat.do("typing")
     response = await ask_gpt(message.text)
-    # Пост-обработка Markdown для оптимизации шрифта
     clean_response = fix_markdown_telegram(response)
-    await send_split_message(message.chat.id, clean_response, parse_mode=types.ParseMode.MARKDOWN)
-
-# ----------------------------------------------------------
-# Функция пост-обработки Markdown (оптимизация шрифта для Telegram)
-# ----------------------------------------------------------
-def fix_markdown_telegram(text: str) -> str:
-    lines = text.split("\n")
-    new_lines = []
-    for line in lines:
-        if line.startswith("### "):
-            heading = line[4:].strip()
-            line = f"**{heading}**"
-        elif line.startswith("## "):
-            heading = line[3:].strip()
-            line = f"**{heading}**"
-        new_lines.append(line)
-    return "\n".join(new_lines)
+    await send_split_message(message.chat.id, clean_response, parse_mode=ParseMode.MARKDOWN)
 
 # ----------------------------------------------------------
 # 10. Запуск бота
