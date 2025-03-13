@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Инициализация Firebase
+# Firebase инициализация
 firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
 if firebase_credentials:
     with open("firebase.json", "w") as f:
@@ -76,14 +76,12 @@ def fix_markdown_telegram(text: str) -> str:
 # ----------------------------------------------------------
 def is_topic_by_regex(text: str) -> bool:
     patterns = [
-        # Фитнес, тренировки, физкультура
         r"\bфитнес\w*",
         r"\bтрениров\w*",
         r"\bтренир\w*",
         r"\bупражн\w*",
         r"\bфизкульт\w*",
         r"\bспорт\w*",
-        # Диета, питание, здоровье
         r"\bдиет\w*",
         r"\bпитан\w*",
         r"\bкалор\w*",
@@ -102,11 +100,9 @@ def is_topic_by_regex(text: str) -> bool:
         r"\bсон\w*",
         r"\bотдых\w*",
         r"\bвосстановлен\w*",
-        # Диетические режимы
         r"\bвеган\w*",
         r"\bвегетариан\w*",
         r"\bкето\w*",
-        # Кардио и силовые тренировки
         r"\bкардио\w*",
         r"\bhiit\b",
         r"\bсил\w*",
@@ -114,18 +110,15 @@ def is_topic_by_regex(text: str) -> bool:
         r"\bягодиц\w*",
         r"\bрастяжк\w*",
         r"\bфункционал\w*",
-        # Спортивное питание и добавки
         r"\bсуплемент\w*",
         r"\bдобавк\w*",
         r"\bанабол\w*",
         r"\bжиросжиган\w*",
-        # Дополнительные аспекты тренировок
         r"\bгипертроф\w*",
         r"\bвыносливост\w*",
         r"\bплиометрик\w*",
         r"\bдинамик\w*",
         r"\bскорост\w*",
-        # Спортивные дисциплины и соревнования
         r"\bфутбол\w*",
         r"\bбокс\w*",
         r"\bбег\w*",
@@ -151,14 +144,8 @@ async def is_topic_by_gpt(text: str) -> bool:
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {
-                "role": "system",
-                "content": "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. Отвечай только 'да' или 'нет'."
-            },
-            {
-                "role": "user",
-                "content": f"Относится ли следующий текст к теме фитнеса, тренировкам, здоровью или питанию? Текст: {text}"
-            }
+            {"role": "system", "content": "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. Отвечай только 'да' или 'нет'."},
+            {"role": "user", "content": f"Относится ли следующий текст к теме фитнеса, тренировкам, здоровью или питанию? Текст: {text}"}
         ],
         temperature=0,
         max_tokens=10
@@ -207,10 +194,8 @@ def is_in_blacklist(text: str) -> bool:
 async def is_fitness_question_combined(text: str) -> bool:
     if is_in_blacklist(text):
         return False
-    # Если общие (whitelist) фразы – разрешаем
     if is_in_whitelist(text):
         return True
-    # Если указаны ограничения по здоровью – разрешаем (чтобы бот мог давать персональные рекомендации)
     if is_health_restriction_question(text):
         return True
     if is_topic_by_regex(text):
@@ -218,7 +203,7 @@ async def is_fitness_question_combined(text: str) -> bool:
     return await is_topic_by_gpt(text)
 
 # ----------------------------------------------------------
-# 9. Функция обновления истории переписки в Firestore
+# 9. Функция обновления истории переписки в Firestore (храним последние 10 сообщений)
 # ----------------------------------------------------------
 async def update_history(user_id: str, role: str, text: str):
     user_ref = db.collection("users").document(user_id)
@@ -332,25 +317,24 @@ async def start(message: types.Message):
     )
 
 # ----------------------------------------------------------
-# 13. Обработчик для обновления цели (если пользователь пишет, что поменяй мою цель)
+# 13. Обработчик для обновления цели (только для сообщений, содержащих фразу 'поменяй мою цель' или 'измени мою цель')
 # ----------------------------------------------------------
-@dp.message()
+@dp.message(lambda message: "поменяй мою цель" in message.text.lower() or "измени мою цель" in message.text.lower())
 async def update_goal(message: types.Message):
     text_lower = message.text.lower()
-    if "поменяй мою цель" in text_lower or "измени мою цель" in text_lower:
-        if "на" in text_lower:
-            new_goal = message.text.split("на", 1)[1].strip()
-            if new_goal:
-                user_id = str(message.from_user.id)
-                db.collection("users").document(user_id).update({"params.цель": new_goal})
-                await message.answer(f"Цель обновлена на: *{new_goal}*", parse_mode=ParseMode.MARKDOWN)
-                return
-        await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
+    if "на" in text_lower:
+        new_goal = message.text.split("на", 1)[1].strip()
+        if new_goal:
+            user_id = str(message.from_user.id)
+            db.collection("users").document(user_id).update({"params.цель": new_goal})
+            await message.answer(f"Цель обновлена на: *{new_goal}*", parse_mode=ParseMode.MARKDOWN)
+            return
+    await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
 # ----------------------------------------------------------
 # 14. Основной обработчик сообщений с комбинированной фильтрацией и обновлением истории
 # ----------------------------------------------------------
-@dp.message()
+@dp.message(lambda message: not ("поменяй мою цель" in message.text.lower() or "измени мою цель" in message.text.lower()))
 async def handle_message(message: types.Message):
     user_id = str(message.from_user.id)
     doc = db.collection("users").document(user_id).get()
