@@ -1,19 +1,23 @@
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart, Command
-from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
 import logging
 import asyncio
 import os
 import re
+from datetime import datetime
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.filters import CommandStart, Command
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 import firebase_admin
 from firebase_admin import credentials, firestore
 from openai import AsyncOpenAI
 
 # =========================================
-# 1. Инициализация и конфигурация
+# 1. Конфигурация и инициализация
 # =========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -23,7 +27,7 @@ if firebase_credentials:
     with open("firebase.json", "w") as f:
         f.write(firebase_credentials)
 else:
-    print("Внимание: переменная FIREBASE_CREDENTIALS не установлена!")
+    logging.warning("Переменная FIREBASE_CREDENTIALS не установлена!")
 
 cred = credentials.Certificate("firebase.json")
 firebase_admin.initialize_app(cred)
@@ -37,9 +41,11 @@ dp = Dispatcher(storage=storage)
 logging.basicConfig(level=logging.INFO)
 
 # =========================================
-# 2. Вспомогательные функции для отправки и форматирования сообщений
+# 2. Вспомогательные функции для отправки сообщений
 # =========================================
+
 def split_message(text, max_length=4096):
+    """Разбивает длинный текст на части, чтобы удовлетворять лимиту Telegram."""
     parts = []
     while len(text) > max_length:
         split_index = text.rfind("\n", 0, max_length)
@@ -51,11 +57,14 @@ def split_message(text, max_length=4096):
     return parts
 
 async def send_split_message(chat_id, text, parse_mode=None):
+    """Отправляет каждую часть текста, если он превышает лимит."""
     parts = split_message(text)
     for part in parts:
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
+        logging.info(f"Отправлена часть сообщения длиной {len(part)} символов.")
 
 def fix_markdown_telegram(text: str) -> str:
+    """Преобразует заголовки вида '###' или '##' в жирный текст для корректного отображения в Telegram."""
     lines = text.split("\n")
     new_lines = []
     for line in lines:
@@ -69,8 +78,9 @@ def fix_markdown_telegram(text: str) -> str:
     return "\n".join(new_lines)
 
 # =========================================
-# 3. Фильтрация запросов: регулярки, whitelist, blacklist, проверка ограничений по здоровью
+# 3. Фильтрация запросов
 # =========================================
+
 def is_topic_by_regex(text: str) -> bool:
     patterns = [
         r"\bфитнес\w*", r"\bтрениров\w*", r"\bтренир\w*", r"\bупражн\w*",
@@ -90,17 +100,21 @@ def is_topic_by_regex(text: str) -> bool:
     return any(re.search(pattern, text_lower) for pattern in patterns)
 
 async def is_topic_by_gpt(text: str) -> bool:
-    response = await openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. Отвечай только 'да' или 'нет'."},
-            {"role": "user", "content": f"Относится ли следующий текст к теме фитнеса, тренировкам, здоровью или питанию? Текст: {text}"}
-        ],
-        temperature=0,
-        max_tokens=10
-    )
-    answer = response.choices[0].message.content.strip().lower()
-    return "да" in answer
+    try:
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. Отвечай только 'да' или 'нет'."},
+                {"role": "user", "content": f"Относится ли следующий текст к теме фитнеса, тренировкам, здоровью или питанию? Текст: {text}"}
+            ],
+            temperature=0,
+            max_tokens=10
+        )
+        answer = response.choices[0].message.content.strip().lower()
+        return "да" in answer
+    except Exception as e:
+        logging.error(f"Ошибка проверки через GPT: {e}")
+        return False
 
 def is_health_restriction_question(text: str) -> bool:
     patterns = [
@@ -127,17 +141,23 @@ def is_in_blacklist(text: str) -> bool:
 
 async def is_fitness_question_combined(text: str) -> bool:
     if is_in_blacklist(text):
+        logging.info("Запрос отклонен по blacklist.")
         return False
     if is_in_whitelist(text):
+        logging.info("Запрос разрешен по whitelist.")
         return True
     if is_health_restriction_question(text):
+        logging.info("Запрос содержит информацию об ограничениях по здоровью.")
         return True
     if is_topic_by_regex(text):
+        logging.info("Запрос определён как фитнес-тематический по регуляркам.")
         return True
-    return await is_topic_by_gpt(text)
+    fallback = await is_topic_by_gpt(text)
+    logging.info(f"Fallback через GPT вернул: {fallback}")
+    return fallback
 
 # =========================================
-# 4. Работа с историей переписки (контекст для GPT)
+# 4. Работа с историей переписки (расширенный контекст: до 30 сообщений)
 # =========================================
 async def update_history(user_id: str, role: str, text: str):
     user_ref = db.collection("users").document(user_id)
@@ -148,12 +168,13 @@ async def update_history(user_id: str, role: str, text: str):
     else:
         history = []
     history.append({"role": role, "text": text})
-    # Сохраним последние 10 сообщений
-    history = history[-10:]
+    # Сохраняем последние 30 сообщений
+    history = history[-30:]
     user_ref.update({"history": history})
+    logging.info(f"Обновлена история пользователя {user_id}. Сейчас хранится {len(history)} сообщений.")
 
 # =========================================
-# 5. Формирование ответа от GPT с расширенным контекстом
+# 5. Формирование ответа от GPT с контекстом
 # =========================================
 async def ask_gpt(user_id: str, user_message: str) -> str:
     doc = db.collection("users").document(user_id).get()
@@ -172,10 +193,9 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
             f"Цель: {params.get('цель', 'N/A')}."
         )
     
-    # Используем последние 10 сообщений для расширенного контекста
     history_context = ""
     if history:
-        history_context = "\n".join([f"{msg['role']}: {msg['text']}" for msg in history[-10:]])
+        history_context = "\n".join([f"{msg['role']}: {msg['text']}" for msg in history[-30:]])
     
     system_message = (
         "Ты профессиональный AI-тренер, консультируешь по фитнесу, тренировкам, здоровью и питанию. "
@@ -200,10 +220,11 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
         temperature=0.5,
         max_tokens=1000
     )
+    logging.info("Ответ от GPT получен.")
     return response.choices[0].message.content
 
 # =========================================
-# 6. FSM для пошагового сбора параметров (онбординг)
+# 6. FSM для онбординга (сбор параметров)
 # =========================================
 class Onboarding(StatesGroup):
     waiting_for_gender = State()
@@ -214,13 +235,14 @@ class Onboarding(StatesGroup):
     waiting_for_goal = State()
 
 # =========================================
-# 7. Онбординг: сбор параметров через FSM
+# 7. Онбординг: пошаговый сбор параметров
 # =========================================
 @dp.message_handler(CommandStart())
 async def start(message: types.Message, state: FSMContext):
     user_id = str(message.from_user.id)
     user_ref = db.collection("users").document(user_id)
     doc = user_ref.get()
+
     if not doc.exists or not doc.to_dict().get("params"):
         user_ref.set({
             "name": message.from_user.full_name,
