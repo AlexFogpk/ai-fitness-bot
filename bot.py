@@ -13,12 +13,15 @@ from openai import AsyncOpenAI
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Firebase инициализация
+# Инициализация Firebase
 firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
-with open("firebase.json", "w") as f:
-    f.write(firebase_credentials)
+if firebase_credentials:
+    with open("firebase.json", "w") as f:
+        f.write(firebase_credentials)
+else:
+    print("Внимание: переменная FIREBASE_CREDENTIALS не установлена!")
 
-cred = credentials.Certificate('firebase.json')
+cred = credentials.Certificate("firebase.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -48,7 +51,7 @@ def split_message(text, max_length=4096):
 # 2. Функция отправки сообщений по частям с поддержкой Markdown
 # ----------------------------------------------------------
 async def send_split_message(chat_id, text, parse_mode=None):
-    parts = split_message(text, max_length=4096)
+    parts = split_message(text)
     for part in parts:
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
 
@@ -164,19 +167,61 @@ async def is_topic_by_gpt(text: str) -> bool:
     return "да" in answer
 
 # ----------------------------------------------------------
-# 6. Комбинированная функция проверки тематичности
+# 6. Функция проверки наличия фраз о состоянии здоровья (ограничения)
 # ----------------------------------------------------------
-async def is_fitness_question_combined(text: str) -> bool:
-    if is_topic_by_regex(text):
-        return True
-    else:
-        return await is_topic_by_gpt(text)
+def is_health_restriction_question(text: str) -> bool:
+    patterns = [
+        r"\bне могу\b",
+        r"\bиз-за\b",
+        r"\bболит\b",
+        r"\bболь\b",
+        r"\bограничен\b",
+        r"\bнет возможности\b",
+        r"\bпроблемы со\b",
+        r"\bс травмой\b"
+    ]
+    text_lower = text.lower()
+    return any(re.search(pattern, text_lower) for pattern in patterns)
 
 # ----------------------------------------------------------
-# 7. Функция обновления истории переписки в Firebase
+# 7. Функции для whitelist и blacklist
+# ----------------------------------------------------------
+def is_in_whitelist(text: str) -> bool:
+    whitelist = [
+        "привет", "здравствуйте", "как дела", "спасибо",
+        "погода", "прогноз", "температура", "маршрут", "пробежк"
+    ]
+    text_lower = text.lower()
+    return any(w in text_lower for w in whitelist)
+
+def is_in_blacklist(text: str) -> bool:
+    blacklist = [
+        "политика", "финансы", "расизм", "кредит"
+    ]
+    text_lower = text.lower()
+    return any(b in text_lower for b in blacklist)
+
+# ----------------------------------------------------------
+# 8. Комбинированная функция проверки тематичности
+# ----------------------------------------------------------
+async def is_fitness_question_combined(text: str) -> bool:
+    if is_in_blacklist(text):
+        return False
+    # Если общие (whitelist) фразы – разрешаем
+    if is_in_whitelist(text):
+        return True
+    # Если указаны ограничения по здоровью – разрешаем (чтобы бот мог давать персональные рекомендации)
+    if is_health_restriction_question(text):
+        return True
+    if is_topic_by_regex(text):
+        return True
+    return await is_topic_by_gpt(text)
+
+# ----------------------------------------------------------
+# 9. Функция обновления истории переписки в Firestore
 # ----------------------------------------------------------
 async def update_history(user_id: str, role: str, text: str):
-    user_ref = db.collection('users').document(user_id)
+    user_ref = db.collection("users").document(user_id)
     doc = user_ref.get()
     if doc.exists:
         data = doc.to_dict()
@@ -184,16 +229,14 @@ async def update_history(user_id: str, role: str, text: str):
     else:
         history = []
     history.append({"role": role, "text": text})
-    # Ограничим историю последними 10 сообщениями
     history = history[-10:]
     user_ref.update({"history": history})
 
 # ----------------------------------------------------------
-# 8. Функция для получения ответа от OpenAI (GPT-4o-mini) с использованием пользовательских параметров и истории
+# 10. Функция для получения ответа от OpenAI (GPT-4o-mini) с учетом параметров и истории
 # ----------------------------------------------------------
 async def ask_gpt(user_id: str, user_message: str) -> str:
-    # Получаем данные пользователя из Firebase
-    doc = db.collection('users').document(user_id).get()
+    doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
     params = user_data.get("params", {})
     history = user_data.get("history", [])
@@ -201,15 +244,16 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     params_context = ""
     if params:
         params_context = (
-            f"Параметры пользователя: Вес: {params.get('вес', 'N/A')} кг, "
+            f"Параметры пользователя: Пол: {params.get('пол', 'N/A')}, "
+            f"Вес: {params.get('вес', 'N/A')} кг, "
             f"Рост: {params.get('рост', 'N/A')} см, "
             f"Возраст: {params.get('возраст', 'N/A')}, "
+            f"Состояние здоровья: {params.get('здоровье', 'N/A')}, "
             f"Цель: {params.get('цель', 'N/A')}."
         )
     
     history_context = ""
     if history:
-        # Используем последние 5 сообщений из истории
         history_context = "\n".join(
             [f"{msg['role']}: {msg['text']}" for msg in history[-5:]]
         )
@@ -217,8 +261,10 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     system_message = (
         "Ты профессиональный AI-тренер, консультируешь по фитнесу, тренировкам, здоровью и питанию. "
         f"{params_context} "
+        "Если пользователь указывает, что по состоянию здоровья он не может выполнять определённые упражнения, "
+        "предлагай альтернативные варианты. "
         "Отвечай кратко и структурированно, используя Markdown, совместимый с Telegram. "
-        "Не используй заголовки вида '###'. Вместо этого для заголовков используй жирный текст. "
+        "Не используй заголовки вида '###'; вместо этого используй жирный текст. "
         "Если вопрос не по теме, отвечай: 'Извини, я могу отвечать только на вопросы о фитнесе, тренировках и здоровом образе жизни.'"
     )
     
@@ -238,38 +284,40 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     return response.choices[0].message.content
 
 # ----------------------------------------------------------
-# 9. Команда для установки параметров (/setparams)
-# Пользователь отправляет параметры в формате: "вес, рост, возраст, цель"
+# 11. Команда для установки параметров (/setparams)
+# Пользователь отправляет параметры в формате: "пол, вес, рост, возраст, состояние здоровья, цель"
 # ----------------------------------------------------------
 @dp.message(Command("setparams"))
 async def set_params(message: types.Message):
     try:
         data = message.text.split(maxsplit=1)[1]
-        parts = [part.strip() for part in data.split(",")]
-        if len(parts) < 4:
+        parts = [p.strip() for p in data.split(",")]
+        if len(parts) < 6:
             raise ValueError("Недостаточно данных.")
         params = {
-            "вес": parts[0],
-            "рост": parts[1],
-            "возраст": parts[2],
-            "цель": parts[3]
+            "пол": parts[0],
+            "вес": parts[1],
+            "рост": parts[2],
+            "возраст": parts[3],
+            "здоровье": parts[4],
+            "цель": parts[5]
         }
         user_id = str(message.from_user.id)
-        db.collection('users').document(user_id).update({"params": params})
+        db.collection("users").document(user_id).update({"params": params})
         await message.answer("Параметры успешно обновлены!", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await message.answer(
-            "Ошибка. Пожалуйста, отправь параметры в формате:\n`вес, рост, возраст, цель`",
+            "Ошибка. Пожалуйста, отправь параметры в формате:\n`пол, вес, рост, возраст, состояние здоровья, цель`",
             parse_mode=ParseMode.MARKDOWN
         )
 
 # ----------------------------------------------------------
-# 10. Стартовая команда
+# 12. Автоматический онбординг: если параметров нет, бот сразу спрашивает их
 # ----------------------------------------------------------
 @dp.message(CommandStart())
 async def start(message: types.Message):
     user_id = str(message.from_user.id)
-    user_ref = db.collection('users').document(user_id)
+    user_ref = db.collection("users").document(user_id)
     user_ref.set({
         "name": message.from_user.full_name,
         "telegram_id": user_id,
@@ -278,20 +326,47 @@ async def start(message: types.Message):
     }, merge=True)
     await message.answer(
         f"Привет, {message.from_user.full_name}! 👋\n\n"
-        "Я твой AI-тренер. Спроси меня о *питании*, _тренировках_, похудении, здоровье или спорте!\n\n"
-        "Чтобы установить свои параметры, используй команду:\n`/setparams вес, рост, возраст, цель`",
+        "Чтобы я мог давать персональные рекомендации, пожалуйста, укажи свои параметры.\n"
+        "Введи данные в формате:\n`пол, вес, рост, возраст, состояние здоровья, цель`",
         parse_mode=ParseMode.MARKDOWN
     )
 
 # ----------------------------------------------------------
-# 11. Основной обработчик сообщений с комбинированной фильтрацией тематики, использованием параметров и обновлением истории
+# 13. Обработчик для обновления цели (если пользователь пишет, что поменяй мою цель)
+# ----------------------------------------------------------
+@dp.message()
+async def update_goal(message: types.Message):
+    text_lower = message.text.lower()
+    if "поменяй мою цель" in text_lower or "измени мою цель" in text_lower:
+        if "на" in text_lower:
+            new_goal = message.text.split("на", 1)[1].strip()
+            if new_goal:
+                user_id = str(message.from_user.id)
+                db.collection("users").document(user_id).update({"params.цель": new_goal})
+                await message.answer(f"Цель обновлена на: *{new_goal}*", parse_mode=ParseMode.MARKDOWN)
+                return
+        await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
+
+# ----------------------------------------------------------
+# 14. Основной обработчик сообщений с комбинированной фильтрацией и обновлением истории
 # ----------------------------------------------------------
 @dp.message()
 async def handle_message(message: types.Message):
     user_id = str(message.from_user.id)
+    doc = db.collection("users").document(user_id).get()
+    user_data = doc.to_dict() if doc.exists else {}
+    params = user_data.get("params", {})
+    if not params:
+        await message.answer(
+            "Чтобы я мог давать персональные рекомендации, пожалуйста, укажи свои параметры в формате:\n"
+            "`пол, вес, рост, возраст, состояние здоровья, цель`",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
     if not await is_fitness_question_combined(message.text):
         await message.answer(
-            "Извини, я могу отвечать только на вопросы, связанные с фитнесом, тренировками, диетой, похудением, здоровьем и спортом.",
+            "Прости, но я не смогу помочь с этим вопросом.\n\n"
+            "Я специализируюсь на фитнесе, тренировках, питании, здоровом образе жизни.",
             parse_mode=ParseMode.MARKDOWN
         )
         return
@@ -300,12 +375,11 @@ async def handle_message(message: types.Message):
     clean_response = fix_markdown_telegram(response)
     await send_split_message(message.chat.id, clean_response, parse_mode=ParseMode.MARKDOWN)
     
-    # Обновляем историю переписки
     await update_history(user_id, "user", message.text)
     await update_history(user_id, "bot", response)
 
 # ----------------------------------------------------------
-# 12. Запуск бота
+# 15. Запуск бота
 # ----------------------------------------------------------
 async def main():
     await dp.start_polling(bot)
