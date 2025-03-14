@@ -20,14 +20,15 @@ from openai import AsyncOpenAI
 # Для работы с NLP (Hugging Face Transformers)
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
+
 # =========================================
-# Константы окружения
+# 1. Константы окружения
 # =========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # =========================================
-# Firebase инициализация
+# 2. Firebase инициализация
 # =========================================
 firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
 if firebase_credentials:
@@ -41,12 +42,12 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 # =========================================
-# Инициализация OpenAI (GPT-4o-mini)
+# 3. Инициализация OpenAI (GPT-4o-mini)
 # =========================================
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # =========================================
-# Инициализация NLP-модели (Hugging Face Transformers)
+# 4. Инициализация NLP-модели (Hugging Face Transformers)
 # =========================================
 model_name = "distilbert-base-uncased-finetuned-sst-2-english"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -64,8 +65,18 @@ def nlp_is_fitness_topic(text: str) -> bool:
     label = result[0]["label"]
     return label == "POSITIVE"
 
+
 # =========================================
-# Глобальные переменные для приветствий (fuzzy matching)
+# 5. Инициализация бота, Dispatcher
+# =========================================
+logging.basicConfig(level=logging.INFO)
+bot = Bot(token=BOT_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+
+
+# =========================================
+# 6. Fuzzy matching для приветствий
 # =========================================
 GREETINGS = [
     "привет", "здравствуйте", "добрый день", "доброе утро", "хай", "приветствую",
@@ -82,8 +93,9 @@ def is_greeting_fuzzy(text: str) -> bool:
     matches = difflib.get_close_matches(text_lower, GREETINGS, n=1, cutoff=0.8)
     return len(matches) > 0
 
+
 # =========================================
-# Улучшенная фильтрация тематики (Шаг 1: разделение паттернов на категории)
+# 7. Фильтрация тематики (регулярки, разделение на категории)
 # =========================================
 def is_topic_by_regex(text: str) -> bool:
     # Категория 1: Фитнес, тренировки, здоровье
@@ -117,36 +129,10 @@ def is_topic_by_regex(text: str) -> bool:
     text_lower = text.lower()
     return any(re.search(pattern, text_lower) for pattern in all_patterns)
 
-# =========================================
-# Остальной код (без изменений)
-# =========================================
 
-async def is_topic_by_gpt(user_id: str, text: str) -> bool:
-    """
-    Проверяем, относится ли сообщение к фитнесу, тренировкам, здоровью или питанию,
-    учитывая последние сообщения (до 10) из истории пользователя.
-    """
-    doc = db.collection("users").document(user_id).get()
-    user_data = doc.to_dict() if doc.exists else {}
-    history = user_data.get("history", [])
-    history_context = "\n".join([f"{msg['role']}: {msg['text']}" for msg in history[-10:]])
-    system_prompt = (
-        "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. Отвечай только 'да' или 'нет'.\n"
-        f"История диалога:\n{history_context}\n\n"
-        "Относится ли следующий текст к теме фитнеса, тренировок, здоровья или питания?\n"
-    )
-    response = await openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text}
-        ],
-        temperature=0,
-        max_tokens=10
-    )
-    answer = response.choices[0].message.content.strip().lower()
-    return "да" in answer
-
+# =========================================
+# 8. Остальные функции фильтрации
+# =========================================
 def is_health_restriction_question(text: str) -> bool:
     patterns = [
         r"\bне могу\b", r"\bиз-за\b", r"\bболит\b", r"\bболь\b",
@@ -177,18 +163,55 @@ def is_in_blacklist(text: str) -> bool:
     text_lower = text.lower()
     return any(word in text_lower for word in blacklist)
 
+# =========================================
+# 9. Проверка тематики (комбинированная)
+# =========================================
 async def is_fitness_question_combined(user_id: str, text: str) -> bool:
+    # 1. Чёрный список
     if is_in_blacklist(text):
         return False
+    # 2. Белый список
     if is_in_whitelist(text):
         return True
+    # 3. Ограничения по здоровью
     if is_health_restriction_question(text):
         return True
+    # 4. Регулярки (фитнес/питание/вредная еда)
     if is_topic_by_regex(text):
         return True
+    # 5. NLP-классификатор (сентимент)
     if nlp_is_fitness_topic(text):
         return True
+    # 6. GPT fallback
     return await is_topic_by_gpt(user_id, text)
+
+# =========================================
+# 10. GPT-проверка (да/нет) и история
+# =========================================
+async def is_topic_by_gpt(user_id: str, text: str) -> bool:
+    doc = db.collection("users").document(user_id).get()
+    user_data = doc.to_dict() if doc.exists else {}
+    history = user_data.get("history", [])
+    history_context = "\n".join([f"{msg['role']}: {msg['text']}" for msg in history[-10:]])
+
+    system_prompt = (
+        "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. "
+        "Отвечай только 'да' или 'нет'. "
+        f"Вот последние сообщения:\n{history_context}\n\n"
+        "Относится ли следующий текст к фитнесу, тренировкам, здоровью или питанию?\n"
+    )
+
+    response = await openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text}
+        ],
+        temperature=0,
+        max_tokens=10
+    )
+    answer = response.choices[0].message.content.strip().lower()
+    return "да" in answer
 
 async def update_history(user_id: str, role: str, text: str):
     user_ref = db.collection("users").document(user_id)
@@ -202,11 +225,16 @@ async def update_history(user_id: str, role: str, text: str):
     history = history[-10:]
     user_ref.update({"history": history})
 
+
+# =========================================
+# 11. Формирование ответа GPT
+# =========================================
 async def ask_gpt(user_id: str, user_message: str) -> str:
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
     params = user_data.get("params", {})
     history = user_data.get("history", [])
+
     params_context = ""
     if params:
         params_context = (
@@ -220,23 +248,26 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     history_context = ""
     if history:
         history_context = "\n".join([f"{msg['role']}: {msg['text']}" for msg in history[-10:]])
+
     system_message = (
         "Ты профессиональный AI-тренер, консультируешь по фитнесу, здоровью и питанию. "
         f"{params_context} "
         "Если пользователь спрашивает про вредные продукты (чипсы, фастфуд, алкоголь и т.д.), "
-        "объясняй, в чём возможный вред, указывай калорийность, давай советы по умеренности и предлагай более здоровые альтернативы. "
-        "Если пользователь спрашивает про здоровое питание, тренировки, баланс, помогай. "
-        "Если по состоянию здоровья он не может выполнять упражнения, предлагай альтернативы. "
-        "Отвечай дружелюбно и понятно, используя Markdown, совместимый с Telegram. "
-        "Не используй заголовки вида '###'; вместо этого используй жирный текст. "
+        "объясняй возможный вред, калорийность, умеренность и здоровые альтернативы. "
+        "Если пользователь спрашивает про здоровое питание, тренировки, баланс — помогай. "
+        "Если есть ограничения по здоровью, предлагай альтернативы. "
+        "Отвечай дружелюбно, используя Markdown (без заголовков вида '###'). "
         "Если вопрос не по теме, отвечай: 'Извини, я могу отвечать только на вопросы о фитнесе, тренировках и здоровом образе жизни.'"
     )
+
     messages = []
     if history_context:
         messages.append({"role": "system", "content": system_message + "\nИстория:\n" + history_context})
     else:
         messages.append({"role": "system", "content": system_message})
+
     messages.append({"role": "user", "content": user_message})
+
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
@@ -245,6 +276,10 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     )
     return response.choices[0].message.content
 
+
+# =========================================
+# 12. FSM для сбора параметров
+# =========================================
 class Onboarding(StatesGroup):
     waiting_for_gender = State()
     waiting_for_weight = State()
@@ -253,15 +288,24 @@ class Onboarding(StatesGroup):
     waiting_for_health = State()
     waiting_for_goal = State()
 
+
+# =========================================
+# 13. Хендлер приветствий
+# =========================================
 @dp.message(lambda msg: is_greeting_fuzzy(msg.text))
 async def greet_user(message: types.Message):
     await message.answer("Привет! Чем могу помочь по фитнесу, питанию и здоровому образу жизни?")
 
+
+# =========================================
+# 14. Стартовая команда
+# =========================================
 @dp.message(CommandStart())
 async def start(message: types.Message, state: FSMContext):
     user_id = str(message.from_user.id)
     user_ref = db.collection("users").document(user_id)
     doc = user_ref.get()
+
     if not doc.exists or not doc.to_dict().get("params"):
         user_ref.set({
             "name": message.from_user.full_name,
@@ -282,6 +326,10 @@ async def start(message: types.Message, state: FSMContext):
             parse_mode=ParseMode.MARKDOWN
         )
 
+
+# =========================================
+# 15. Сбор параметров пошагово
+# =========================================
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
     gender = message.text.strip()
@@ -325,6 +373,7 @@ async def process_health(message: types.Message, state: FSMContext):
 async def process_goal(message: types.Message, state: FSMContext):
     goal = message.text.strip()
     await state.update_data(goal=goal)
+
     data = await state.get_data()
     gender = data["gender"]
     weight = data["weight"]
@@ -332,6 +381,7 @@ async def process_goal(message: types.Message, state: FSMContext):
     age = data["age"]
     health = data["health"]
     goal = data["goal"]
+
     user_id = str(message.from_user.id)
     params = {
         "пол": gender,
@@ -342,6 +392,7 @@ async def process_goal(message: types.Message, state: FSMContext):
         "цель": goal
     }
     db.collection("users").document(user_id).update({"params": params})
+
     await message.answer(
         "Отлично! Я записал твои параметры:\n"
         f"• Пол: {gender}\n"
@@ -355,6 +406,10 @@ async def process_goal(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
+
+# =========================================
+# 16. Обновление цели
+# =========================================
 @dp.message(lambda msg: "поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower())
 async def update_goal(message: types.Message):
     text_lower = message.text.lower()
@@ -367,12 +422,18 @@ async def update_goal(message: types.Message):
             return
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
+
+# =========================================
+# 17. Основной обработчик сообщений
+# =========================================
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
 async def handle_message(message: types.Message):
     user_id = str(message.from_user.id)
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
     params = user_data.get("params", {})
+
+    # Если параметры не заданы — просим пройти онбординг
     if not params:
         await message.answer(
             "Чтобы я мог давать персональные рекомендации, пожалуйста, ответь на вопросы:\n"
@@ -381,6 +442,8 @@ async def handle_message(message: types.Message):
             parse_mode=ParseMode.MARKDOWN
         )
         return
+
+    # Проверяем тематику вопроса
     if not await is_fitness_question_combined(user_id, message.text):
         await message.answer(
             "Прости, но я не смогу помочь с этим вопросом.\n\n"
@@ -388,13 +451,21 @@ async def handle_message(message: types.Message):
             parse_mode=ParseMode.MARKDOWN
         )
         return
+
+    # Если вопрос разрешён
     await message.chat.do("typing")
     response = await ask_gpt(user_id, message.text)
     clean_response = fix_markdown_telegram(response)
     await send_split_message(message.chat.id, clean_response, parse_mode=ParseMode.MARKDOWN)
+
+    # Обновляем историю
     await update_history(user_id, "user", message.text)
     await update_history(user_id, "bot", response)
 
+
+# =========================================
+# 18. Точка входа
+# =========================================
 async def main():
     await dp.start_polling(bot)
 
