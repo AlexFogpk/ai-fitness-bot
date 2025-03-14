@@ -242,7 +242,7 @@ async def update_history(user_id: str, role: str, text: str):
     else:
         history = []
     history.append({"role": role, "text": text})
-    history = history[-10:]
+    history = history[-5:]
     user_ref.update({"history": history})
 
 # =========================================
