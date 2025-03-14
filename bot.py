@@ -14,53 +14,40 @@ from aiogram.fsm.state import StatesGroup, State
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Для работы с OpenAI (gpt-4o-mini)
 from openai import AsyncOpenAI
-
-# Для работы с NLP (Hugging Face Transformers)
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
-# =========================================
-# 1. Константы окружения
-# =========================================
+# --- Настройки и функции, не использующие dp ---
+
+# Константы окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# =========================================
-# 2. Firebase инициализация
-# =========================================
+# Firebase инициализация
 firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
 if firebase_credentials:
     with open("firebase.json", "w") as f:
         f.write(firebase_credentials)
 else:
     print("Внимание: переменная FIREBASE_CREDENTIALS не установлена!")
-
 cred = credentials.Certificate("firebase.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# =========================================
-# 3. Инициализация OpenAI (GPT-4o-mini)
-# =========================================
+# Инициализация OpenAI
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# =========================================
-# 4. Инициализация NLP-модели (Hugging Face Transformers)
-# =========================================
-model_name = "blanchefort/rubert-base-cased-sentiment"
+# Инициализация NLP-модели
+model_name = "blanchefort/rubert-base-cased-sentiment"  # русская модель, если хотите
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 def nlp_is_fitness_topic(text: str) -> bool:
     result = classifier(text)
-    label = result[0]["label"]
-    return label == "POSITIVE"
+    label = result[0]["label"].lower()
+    return label == "positive"
 
-# =========================================
-# 5. Функция для обработки Markdown
-# =========================================
 def fix_markdown_telegram(text: str) -> str:
     lines = text.split("\n")
     new_lines = []
@@ -74,9 +61,6 @@ def fix_markdown_telegram(text: str) -> str:
         new_lines.append(line)
     return "\n".join(new_lines)
 
-# =========================================
-# 6. Функция разбивки длинного текста
-# =========================================
 def split_message(text, max_length=4096):
     parts = []
     while len(text) > max_length:
@@ -88,17 +72,11 @@ def split_message(text, max_length=4096):
     parts.append(text)
     return parts
 
-# =========================================
-# 7. Отправка сообщений по частям
-# =========================================
 async def send_split_message(chat_id, text, parse_mode=None):
     parts = split_message(text)
     for part in parts:
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
 
-# =========================================
-# 8. Fuzzy matching для приветствий
-# =========================================
 GREETINGS = [
     "привет", "здравствуйте", "добрый день", "доброе утро", "хай", "приветствую",
     "здарова", "салют", "хелло", "хелоу", "хей", "хэй", "йоу",
@@ -110,9 +88,7 @@ def is_greeting_fuzzy(text: str) -> bool:
     matches = difflib.get_close_matches(text_lower, GREETINGS, n=1, cutoff=0.8)
     return len(matches) > 0
 
-# =========================================
-# 9. Фильтрация тематики: разделение паттернов на категории
-# =========================================
+# Функция фильтрации по регуляркам (с разделением на категории)
 def is_topic_by_regex(text: str) -> bool:
     patterns_fitness = [
         r"\bфитнес\w*", r"\bтрениров\w*", r"\bтренир\w*", r"\bупражн\w*",
@@ -139,9 +115,6 @@ def is_topic_by_regex(text: str) -> bool:
     text_lower = text.lower()
     return any(re.search(pattern, text_lower) for pattern in all_patterns)
 
-# =========================================
-# 10. Дополнительные функции фильтрации
-# =========================================
 def is_health_restriction_question(text: str) -> bool:
     patterns = [
         r"\bне могу\b", r"\bиз-за\b", r"\bболит\b", r"\bболь\b",
@@ -172,9 +145,6 @@ def is_in_blacklist(text: str) -> bool:
     text_lower = text.lower()
     return any(word in text_lower for word in blacklist)
 
-# =========================================
-# 11. Комбинированная проверка тематики
-# =========================================
 async def is_fitness_question_combined(user_id: str, text: str) -> bool:
     if is_in_blacklist(text):
         return False
@@ -188,9 +158,6 @@ async def is_fitness_question_combined(user_id: str, text: str) -> bool:
         return True
     return await is_topic_by_gpt(user_id, text)
 
-# =========================================
-# 12. GPT fallback для проверки тематики
-# =========================================
 async def is_topic_by_gpt(user_id: str, text: str) -> bool:
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
@@ -199,7 +166,7 @@ async def is_topic_by_gpt(user_id: str, text: str) -> bool:
     system_prompt = (
         "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. Отвечай только 'да' или 'нет'.\n"
         f"История диалога:\n{history_context}\n\n"
-        "Относится ли следующий текст к теме фитнеса, тренировкам, здоровью или питанию?\n"
+        "Относится ли следующий текст к теме фитнеса, тренировок, здоровью или питанию?\n"
     )
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
@@ -213,9 +180,6 @@ async def is_topic_by_gpt(user_id: str, text: str) -> bool:
     answer = response.choices[0].message.content.strip().lower()
     return "да" in answer
 
-# =========================================
-# 13. Обновление истории в Firestore
-# =========================================
 async def update_history(user_id: str, role: str, text: str):
     user_ref = db.collection("users").document(user_id)
     doc = user_ref.get()
@@ -228,9 +192,6 @@ async def update_history(user_id: str, role: str, text: str):
     history = history[-10:]
     user_ref.update({"history": history})
 
-# =========================================
-# 14. Формирование ответа GPT
-# =========================================
 async def ask_gpt(user_id: str, user_message: str) -> str:
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
@@ -273,9 +234,6 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     )
     return response.choices[0].message.content
 
-# =========================================
-# 15. FSM для сбора параметров
-# =========================================
 class Onboarding(StatesGroup):
     waiting_for_gender = State()
     waiting_for_weight = State()
@@ -284,16 +242,10 @@ class Onboarding(StatesGroup):
     waiting_for_health = State()
     waiting_for_goal = State()
 
-# =========================================
-# 16. Хендлер для приветствий с использованием fuzzy matching
-# =========================================
 @dp.message(lambda msg: is_greeting_fuzzy(msg.text))
 async def greet_user(message: types.Message):
     await message.answer("Привет! Чем могу помочь по фитнесу, питанию и здоровому образу жизни?")
 
-# =========================================
-# 17. Стартовая команда
-# =========================================
 @dp.message(CommandStart())
 async def start(message: types.Message, state: FSMContext):
     user_id = str(message.from_user.id)
@@ -319,9 +271,6 @@ async def start(message: types.Message, state: FSMContext):
             parse_mode=ParseMode.MARKDOWN
         )
 
-# =========================================
-# 18. Сбор параметров пошагово
-# =========================================
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
     gender = message.text.strip()
@@ -395,9 +344,6 @@ async def process_goal(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
-# =========================================
-# 19. Обновление цели
-# =========================================
 @dp.message(lambda msg: "поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower())
 async def update_goal(message: types.Message):
     text_lower = message.text.lower()
@@ -410,9 +356,6 @@ async def update_goal(message: types.Message):
             return
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
-# =========================================
-# 20. Основной обработчик сообщений
-# =========================================
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
 async def handle_message(message: types.Message):
     user_id = str(message.from_user.id)
@@ -441,9 +384,6 @@ async def handle_message(message: types.Message):
     await update_history(user_id, "user", message.text)
     await update_history(user_id, "bot", response)
 
-# =========================================
-# 21. Точка входа
-# =========================================
 async def main():
     await dp.start_polling(bot)
 
