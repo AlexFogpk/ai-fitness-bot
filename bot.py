@@ -54,11 +54,6 @@ model = AutoModelForSequenceClassification.from_pretrained(model_name)
 classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 def nlp_is_fitness_topic(text: str) -> bool:
-    """
-    Используем модель для сентимент-анализа в качестве примера.
-    Если модель возвращает "POSITIVE", считаем, что текст относится к фитнес-тематике.
-    (Для русского языка и точного определения 'фитнес/не фитнес' может потребоваться дообучение модели.)
-    """
     result = classifier(text)
     label = result[0]["label"]
     return label == "POSITIVE"
@@ -67,9 +62,6 @@ def nlp_is_fitness_topic(text: str) -> bool:
 # 5. Функция для обработки Markdown
 # =========================================
 def fix_markdown_telegram(text: str) -> str:
-    """
-    Преобразует заголовки вида '###' или '##' в жирный текст.
-    """
     lines = text.split("\n")
     new_lines = []
     for line in lines:
@@ -207,7 +199,7 @@ async def is_topic_by_gpt(user_id: str, text: str) -> bool:
     system_prompt = (
         "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. Отвечай только 'да' или 'нет'.\n"
         f"История диалога:\n{history_context}\n\n"
-        "Относится ли следующий текст к теме фитнеса, тренировок, здоровья или питания?\n"
+        "Относится ли следующий текст к теме фитнеса, тренировкам, здоровью или питанию?\n"
     )
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
@@ -293,7 +285,7 @@ class Onboarding(StatesGroup):
     waiting_for_goal = State()
 
 # =========================================
-# 16. Хендлер для приветствий с fuzzy matching
+# 16. Хендлер для приветствий с использованием fuzzy matching
 # =========================================
 @dp.message(lambda msg: is_greeting_fuzzy(msg.text))
 async def greet_user(message: types.Message):
