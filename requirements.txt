@@ -7,3 +7,4 @@ httpx==0.26.0
 torch==2.0.0+cpu
 transformers
 datasets
+numpy==1.23.5
