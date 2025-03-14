@@ -49,7 +49,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # 4. Инициализация NLP-модели (русская модель для сентимент-анализа)
 # =========================================
 # Используем русскоязычную модель для сентимент-анализа
-model_name = "blanchefort/rubert-base-cased-sentiment"
+model_name = "cointegrated/rubert-tiny2"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
