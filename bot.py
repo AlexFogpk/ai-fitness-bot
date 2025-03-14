@@ -1,15 +1,19 @@
+import logging
+import asyncio
+import os
+import re
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-import logging
-import asyncio
-import os
-import re
+
 import firebase_admin
 from firebase_admin import credentials, firestore
+
+# Для работы с OpenAI (gpt-4o-mini)
 from openai import AsyncOpenAI
 
 # =========================================
@@ -105,14 +109,35 @@ def is_topic_by_regex(text: str) -> bool:
     return any(re.search(pattern, text_lower) for pattern in patterns)
 
 # =========================================
-# 5. Проверка через GPT (fallback)
+# 5. Проверка через GPT с учётом контекста
 # =========================================
-async def is_topic_by_gpt(text: str) -> bool:
+async def is_topic_by_gpt(user_id: str, text: str) -> bool:
+    """
+    Проверяем, относится ли сообщение к фитнесу/тренировкам/здоровью/питанию,
+    учитывая последние сообщения (до 10) из истории пользователя.
+    """
+    doc = db.collection("users").document(user_id).get()
+    user_data = doc.to_dict() if doc.exists else {}
+    history = user_data.get("history", [])
+
+    # Собираем до 10 последних сообщений для контекста
+    history_context = "\n".join(
+        [f"{msg['role']}: {msg['text']}" for msg in history[-10:]]
+    )
+
+    system_prompt = (
+        "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. "
+        "Отвечай только 'да' или 'нет'. "
+        "Вот последние сообщения диалога:\n"
+        f"{history_context}\n\n"
+        "Теперь вопрос: относится ли СЛЕДУЮЩИЙ текст к теме фитнеса, тренировок, здоровья или питания?\n"
+    )
+
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Ты эксперт по фитнесу, тренировкам, здоровью и питанию. Отвечай только 'да' или 'нет'."},
-            {"role": "user", "content": f"Относится ли следующий текст к теме фитнеса, тренировкам, здоровью или питанию? Текст: {text}"}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text}
         ],
         temperature=0,
         max_tokens=10
@@ -152,16 +177,21 @@ def is_in_blacklist(text: str) -> bool:
 # =========================================
 # 8. Комбинированная функция проверки тематики
 # =========================================
-async def is_fitness_question_combined(text: str) -> bool:
+async def is_fitness_question_combined(user_id: str, text: str) -> bool:
+    # Сначала проверяем «чёрный список»
     if is_in_blacklist(text):
         return False
+    # Если есть в «белом списке», пропускаем
     if is_in_whitelist(text):
         return True
+    # Если упоминание ограничений по здоровью
     if is_health_restriction_question(text):
         return True
+    # Если совпало по регуляркам (явные слова фитнес/тренировки/и т.д.)
     if is_topic_by_regex(text):
         return True
-    return await is_topic_by_gpt(text)
+    # Иначе спрашиваем GPT с учётом контекста
+    return await is_topic_by_gpt(user_id, text)
 
 # =========================================
 # 9. Обновление истории в Firestore
@@ -175,11 +205,12 @@ async def update_history(user_id: str, role: str, text: str):
     else:
         history = []
     history.append({"role": role, "text": text})
+    # Храним последние 10 сообщений
     history = history[-10:]
     user_ref.update({"history": history})
 
 # =========================================
-# 10. Формирование ответа GPT
+# 10. Формирование ответа GPT (с контекстом)
 # =========================================
 async def ask_gpt(user_id: str, user_message: str) -> str:
     doc = db.collection("users").document(user_id).get()
@@ -187,6 +218,7 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     params = user_data.get("params", {})
     history = user_data.get("history", [])
     
+    # Формируем контекст из параметров пользователя
     params_context = ""
     if params:
         params_context = (
@@ -198,10 +230,11 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
             f"Цель: {params.get('цель', 'N/A')}."
         )
     
+    # Собираем до 10 последних сообщений для контекста
     history_context = ""
     if history:
         history_context = "\n".join(
-            [f"{msg['role']}: {msg['text']}" for msg in history[-5:]]
+            [f"{msg['role']}: {msg['text']}" for msg in history[-10:]]
         )
     
     system_message = (
@@ -214,13 +247,18 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
         "Если вопрос не по теме, отвечай: 'Извини, я могу отвечать только на вопросы о фитнесе, тренировках и здоровом образе жизни.'"
     )
     
+    # Формируем список сообщений для GPT
     messages = []
     if history_context:
+        # Добавляем историю в system-промпт
         messages.append({"role": "system", "content": system_message + "\nИстория:\n" + history_context})
     else:
         messages.append({"role": "system", "content": system_message})
+    
+    # Текущее сообщение пользователя
     messages.append({"role": "user", "content": user_message})
     
+    # Отправляем в GPT
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
@@ -230,9 +268,8 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     return response.choices[0].message.content
 
 # =========================================
-# Шаги FSM для пошагового сбора параметров
+# FSM для пошагового сбора параметров
 # =========================================
-from aiogram.fsm.state import StatesGroup, State
 class Onboarding(StatesGroup):
     waiting_for_gender = State()
     waiting_for_weight = State()
@@ -240,9 +277,6 @@ class Onboarding(StatesGroup):
     waiting_for_age = State()
     waiting_for_health = State()
     waiting_for_goal = State()
-
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
 
 # =========================================
 # 11. Стартовая команда
@@ -278,7 +312,6 @@ async def start(message: types.Message, state: FSMContext):
 # =========================================
 # 12. Сбор параметров пошагово
 # =========================================
-
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
     gender = message.text.strip()
@@ -391,7 +424,7 @@ async def handle_message(message: types.Message):
         return
 
     # Фильтрация вопроса
-    if not await is_fitness_question_combined(message.text):
+    if not await is_fitness_question_combined(user_id, message.text):
         await message.answer(
             "Прости, но я не смогу помочь с этим вопросом.\n\n"
             "Я специализируюсь на фитнесе, тренировках, питании, здоровом образе жизни.",
@@ -405,7 +438,7 @@ async def handle_message(message: types.Message):
     clean_response = fix_markdown_telegram(response)
     await send_split_message(message.chat.id, clean_response, parse_mode=ParseMode.MARKDOWN)
 
-    # Обновляем историю
+    # Обновляем историю (сохраняем вопрос и ответ)
     await update_history(user_id, "user", message.text)
     await update_history(user_id, "bot", response)
 
