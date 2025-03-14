@@ -48,7 +48,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # =========================================
 # 4. Инициализация NLP-модели (Hugging Face Transformers)
 # =========================================
-model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+model_name = "blanchefort/rubert-base-cased-sentiment"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
