@@ -2,3 +2,7 @@ aiogram==3.4.1
 firebase-admin==6.5.0
 openai==1.14.3
 httpx==0.26.0
+
+transformers==4.26.1
+torch==1.13.1
+datasets==2.8.0
