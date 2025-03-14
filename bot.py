@@ -16,6 +16,9 @@ from firebase_admin import credentials, firestore
 # Для работы с OpenAI (gpt-4o-mini)
 from openai import AsyncOpenAI
 
+# Для работы с NLP (Hugging Face Transformers)
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+
 # =========================================
 # Константы окружения
 # =========================================
@@ -40,6 +43,23 @@ db = firestore.client()
 # Инициализация OpenAI (GPT-4o-mini)
 # =========================================
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# =========================================
+# Инициализация NLP-модели (Hugging Face Transformers)
+# =========================================
+model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
+
+def nlp_is_fitness_topic(text: str) -> bool:
+    """
+    Используем модель для сентимент-анализа в качестве примера.
+    Если модель возвращает "POSITIVE", считаем, что текст относится к фитнес-тематике.
+    """
+    result = classifier(text)
+    label = result[0]["label"]
+    return label == "POSITIVE"
 
 # =========================================
 # Инициализация бота + FSM
@@ -184,11 +204,14 @@ async def is_fitness_question_combined(user_id: str, text: str) -> bool:
     # Если есть в «белом списке», пропускаем
     if is_in_whitelist(text):
         return True
-    # Если упоминание ограничений по здоровью
+    # Если упоминается ограничение по здоровью
     if is_health_restriction_question(text):
         return True
-    # Если совпало по регуляркам (явные слова фитнес/тренировки/и т.д.)
+    # Если совпало по регуляркам (явные слова фитнес/тренировки и т.д.)
     if is_topic_by_regex(text):
+        return True
+    # Если NLP-классификатор считает, что текст относится к фитнесу
+    if nlp_is_fitness_topic(text):
         return True
     # Иначе спрашиваем GPT с учётом контекста
     return await is_topic_by_gpt(user_id, text)
@@ -250,15 +273,12 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     # Формируем список сообщений для GPT
     messages = []
     if history_context:
-        # Добавляем историю в system-промпт
         messages.append({"role": "system", "content": system_message + "\nИстория:\n" + history_context})
     else:
         messages.append({"role": "system", "content": system_message})
     
-    # Текущее сообщение пользователя
     messages.append({"role": "user", "content": user_message})
     
-    # Отправляем в GPT
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
@@ -432,7 +452,6 @@ async def handle_message(message: types.Message):
         )
         return
 
-    # Если вопрос разрешён
     await message.chat.do("typing")
     response = await ask_gpt(user_id, message.text)
     clean_response = fix_markdown_telegram(response)
