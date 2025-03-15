@@ -86,6 +86,18 @@ main_menu_kb = ReplyKeyboardMarkup(
     resize_keyboard=True  # клавиатура будет компактной
 )
 
+# Дополнительная клавиатура для выбора уровня активности
+activity_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Сидячий (1.2)")],
+        [KeyboardButton(text="Лёгкая активность (1.375)")],
+        [KeyboardButton(text="Средняя активность (1.55)")],
+        [KeyboardButton(text="Высокая активность (1.7)")],
+        [KeyboardButton(text="Очень высокая (1.9)")]
+    ],
+    resize_keyboard=True
+)
+
 # =========================================
 # 7. Функция для обработки Markdown
 # =========================================
@@ -309,6 +321,7 @@ class Onboarding(StatesGroup):
     waiting_for_age = State()
     waiting_for_health = State()
     waiting_for_goal = State()
+    waiting_for_activity = State()  # новый шаг для выбора активности
 
 # =========================================
 # 17. FSM для изменения цели (короткий опрос)
@@ -369,9 +382,7 @@ async def handle_change_data(message: types.Message, state: FSMContext):
 # 20.2. Изменить цель – запуск короткого FSM для ввода новой цели
 @dp.message(lambda msg: msg.text == "Изменить цель")
 async def handle_change_goal_button(message: types.Message, state: FSMContext):
-    await message.answer(
-        "Окей! Введи, пожалуйста, новую цель (например: похудение, набор массы и т.д.)"
-    )
+    await message.answer("Окей! Введи, пожалуйста, новую цель (например: похудение, набор массы и т.д.)")
     await state.set_state(ChangeGoal.waiting_for_new_goal)
 
 @dp.message(ChangeGoal.waiting_for_new_goal)
@@ -382,9 +393,77 @@ async def process_new_goal(message: types.Message, state: FSMContext):
     await message.answer(f"Цель обновлена на: *{new_goal}*", parse_mode=ParseMode.MARKDOWN)
     await state.clear()
 
-# =========================================
+# 20.3. Посчитать КБЖУ – расчет калорий и макронутриентов с учётом активности и цели
+@dp.message(lambda msg: msg.text == "Посчитать КБЖУ")
+async def handle_calculate_kbju(message: types.Message):
+    user_id = str(message.from_user.id)
+    doc = db.collection("users").document(user_id).get()
+    user_data = doc.to_dict() if doc.exists else {}
+
+    if not user_data or "params" not in user_data:
+        await message.answer(
+            "Чтобы рассчитать КБЖУ, мне нужны твои параметры. Пожалуйста, сначала задай их с помощью /start или 'Изменить данные'."
+        )
+        return
+
+    params = user_data["params"]
+    gender = params.get("пол", "").lower()
+    try:
+        weight = float(params.get("вес", 0))
+        height = float(params.get("рост", 0))
+        age = float(params.get("возраст", 0))
+    except ValueError:
+        await message.answer("Некорректные данные. Пожалуйста, обнови свои параметры через 'Изменить данные'.")
+        return
+
+    if not (weight > 0 and height > 0 and age > 0 and (gender in ["мужчина", "женщина"])):
+        await message.answer("Похоже, твои параметры неполные или некорректные. Попробуй 'Изменить данные'.")
+        return
+
+    activity_factor = float(params.get("активность", 1.375))
+    # Расчет BMR по формуле Миффлина – Сан Жеора
+    if gender == "мужчина":
+        bmr = 9.99 * weight + 6.25 * height - 4.92 * age + 5
+    else:
+        bmr = 9.99 * weight + 6.25 * height - 4.92 * age - 161
+
+    tdee = bmr * activity_factor
+
+    # Корректировка TDEE в зависимости от цели
+    goal_lower = params.get("цель", "").lower()
+    if "похуд" in goal_lower:
+        factor_goal = 0.85  # вычесть примерно 15%
+        protein_factor = 1.8
+    elif "набор" in goal_lower:
+        factor_goal = 1.15  # прибавить примерно 15%
+        protein_factor = 1.5
+    else:
+        factor_goal = 1.0
+        protein_factor = 1.5
+
+    tdee_adjusted = tdee * factor_goal
+
+    # Расчет макронутриентов:
+    protein_g = protein_factor * weight
+    fat_g = 1.0 * weight
+    cals_from_protein = protein_g * 4
+    cals_from_fat = fat_g * 9
+    carbs_cals = tdee_adjusted - (cals_from_protein + cals_from_fat)
+    carbs_g = carbs_cals / 4 if carbs_cals > 0 else 0
+
+    response_text = (
+        f"Твои расчётные показатели (приблизительно):\n\n"
+        f"Суточная потребность в калориях: ~{int(tdee_adjusted)} ккал\n\n"
+        f"Белки: {int(protein_g)} г/день\n"
+        f"Жиры: {int(fat_g)} г/день\n"
+        f"Углеводы: {int(carbs_g)} г/день\n\n"
+        f"Учти, что это приблизительный расчёт, скорректированный с учётом твоей активности и цели ({params.get('цель', 'N/A')})."
+    )
+    await message.answer(response_text)
+
+#########################
 # 21. Сбор параметров пошагово (онбординг)
-# =========================================
+#########################
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
     gender = message.text.strip()
@@ -424,37 +503,52 @@ async def process_health(message: types.Message, state: FSMContext):
     await message.answer("И наконец, какая у тебя **цель**? (например: похудение, набор массы и т.д.)", parse_mode=ParseMode.MARKDOWN)
     await state.set_state(Onboarding.waiting_for_goal)
 
+# После ввода цели просим выбрать уровень активности
 @dp.message(Onboarding.waiting_for_goal)
 async def process_goal(message: types.Message, state: FSMContext):
     goal = message.text.strip()
     await state.update_data(goal=goal)
+    await message.answer(
+        "Выбери уровень физической активности:",
+        reply_markup=activity_kb,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    await state.set_state(Onboarding.waiting_for_activity)
+
+# Обработка выбора активности
+@dp.message(Onboarding.waiting_for_activity)
+async def process_activity(message: types.Message, state: FSMContext):
+    activity_text = message.text.strip()
+    match = re.search(r"\(([\d\.]+)\)", activity_text)
+    if match:
+        activity_factor = float(match.group(1))
+    else:
+        activity_factor = 1.2
+    await state.update_data(activity=activity_factor)
     data = await state.get_data()
-    gender = data["gender"]
-    weight = data["weight"]
-    height = data["height"]
-    age = data["age"]
-    health = data["health"]
-    goal = data["goal"]
     user_id = str(message.from_user.id)
     params = {
-        "пол": gender,
-        "вес": weight,
-        "рост": height,
-        "возраст": age,
-        "здоровье": health,
-        "цель": goal
+        "пол": data.get("gender"),
+        "вес": data.get("weight"),
+        "рост": data.get("height"),
+        "возраст": data.get("age"),
+        "здоровье": data.get("health"),
+        "цель": data.get("goal"),
+        "активность": activity_factor
     }
     db.collection("users").document(user_id).update({"params": params})
     await message.answer(
         "Отлично! Я записал твои параметры:\n"
-        f"• Пол: {gender}\n"
-        f"• Вес: {weight}\n"
-        f"• Рост: {height}\n"
-        f"• Возраст: {age}\n"
-        f"• Здоровье: {health}\n"
-        f"• Цель: {goal}\n\n"
+        f"• Пол: {data.get('gender')}\n"
+        f"• Вес: {data.get('weight')}\n"
+        f"• Рост: {data.get('height')}\n"
+        f"• Возраст: {data.get('age')}\n"
+        f"• Здоровье: {data.get('health')}\n"
+        f"• Цель: {data.get('goal')}\n"
+        f"• Активность: {activity_factor}\n\n"
         "Теперь можешь задать вопрос по фитнесу, питанию и т.д.!",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_kb
     )
     await state.clear()
 
@@ -474,7 +568,7 @@ async def update_goal(message: types.Message):
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
 # =========================================
-# 23. Основной обработчик сообщений
+# 23. Основной обработчик сообщений (общий fallback)
 # =========================================
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
 async def handle_message(message: types.Message):
