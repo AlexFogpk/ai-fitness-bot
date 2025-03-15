@@ -50,8 +50,10 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # 4. Инициализация NLP-модели (русская модель для сентимент-анализа)
 # =========================================
 model_name = "cointegrated/rubert-tiny2"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForSequenceClassification.from_pretrained(model_name)
+huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
+
+tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=huggingface_token)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, use_auth_token=huggingface_token)
 classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 def nlp_is_fitness_topic(text: str) -> bool:
