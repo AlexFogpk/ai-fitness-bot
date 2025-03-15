@@ -7,6 +7,7 @@ import difflib  # для fuzzy matching
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton  # <-- добавили импорт клавиатуры
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -48,18 +49,12 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # =========================================
 # 4. Инициализация NLP-модели (русская модель для сентимент-анализа)
 # =========================================
-# Используем русскоязычную модель для сентимент-анализа
 model_name = "cointegrated/rubert-tiny2"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
 classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 def nlp_is_fitness_topic(text: str) -> bool:
-    """
-    Используем русскоязычную модель сентимент-анализа.
-    Если модель возвращает "positive", считаем, что текст имеет положительный настрой,
-    что условно может свидетельствовать о релевантности теме фитнеса/питания.
-    """
     result = classifier(text)
     label = result[0]["label"].lower()
     return label == "positive"
@@ -73,7 +68,26 @@ storage = MemoryStorage()  # Храним состояние в памяти
 dp = Dispatcher(storage=storage)
 
 # =========================================
-# 6. Функция для обработки Markdown
+# 6. Определение Reply Keyboard для главного меню
+# =========================================
+btn_change_data = KeyboardButton(text="Изменить данные")
+btn_change_goal = KeyboardButton(text="Изменить цель")
+btn_calculate_kbju = KeyboardButton(text="Посчитать КБЖУ")
+btn_plans = KeyboardButton(text="Планы тренировок")
+btn_support = KeyboardButton(text="Тех. Поддержка")
+btn_subscription = KeyboardButton(text="Подписка")
+
+main_menu_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [btn_change_data, btn_change_goal],
+        [btn_calculate_kbju, btn_plans],
+        [btn_support, btn_subscription]
+    ],
+    resize_keyboard=True  # клавиатура будет компактной
+)
+
+# =========================================
+# 7. Функция для обработки Markdown
 # =========================================
 def fix_markdown_telegram(text: str) -> str:
     lines = text.split("\n")
@@ -89,7 +103,7 @@ def fix_markdown_telegram(text: str) -> str:
     return "\n".join(new_lines)
 
 # =========================================
-# 7. Функция разбивки длинного текста
+# 8. Функция разбивки длинного текста
 # =========================================
 def split_message(text, max_length=4096):
     parts = []
@@ -103,7 +117,7 @@ def split_message(text, max_length=4096):
     return parts
 
 # =========================================
-# 8. Отправка сообщений по частям
+# 9. Отправка сообщений по частям
 # =========================================
 async def send_split_message(chat_id, text, parse_mode=None):
     parts = split_message(text)
@@ -111,7 +125,7 @@ async def send_split_message(chat_id, text, parse_mode=None):
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
 
 # =========================================
-# 9. Fuzzy matching для приветствий
+# 10. Fuzzy matching для приветствий
 # =========================================
 GREETINGS = [
     "привет", "здравствуйте", "добрый день", "доброе утро", "хай", "приветствую",
@@ -125,21 +139,18 @@ def is_greeting_fuzzy(text: str) -> bool:
     return len(matches) > 0
 
 # =========================================
-# 10. Фильтрация тематики: разделение паттернов на категории
+# 11. Фильтрация тематики (регулярки и дополнительные проверки)
 # =========================================
 def is_topic_by_regex(text: str) -> bool:
-    # Категория 1: Фитнес, тренировки, здоровье
     patterns_fitness = [
         r"\bфитнес\w*", r"\bтрениров\w*", r"\bтренир\w*", r"\bупражн\w*",
         r"\bфизкульт\w*", r"\bспорт\w*", r"\bсил\w*", r"\bпресс\w*",
         r"\bягодиц\w*", r"\bрастяжк\w*", r"\bвыносливост\w*"
     ]
-    # Категория 2: Здоровое питание
     patterns_healthy_food = [
         r"\bдиет\w*", r"\bпитан\w*", r"\bкалор\w*", r"\bбелк\w*",
         r"\bовощ\w*", r"\bфрукт\w*", r"\bменю\w*", r"\bрецепт\w*"
     ]
-    # Категория 3: Вредная еда, фастфуд, сладости, напитки
     patterns_unhealthy_food = [
         r"\bчипс\w*", r"\bснэк\w*", r"\bфастфуд\w*", r"\bбургер\w*", r"\bгамбургер\w*",
         r"\bшаурм\w*", r"\bдонер\w*", r"\bкартофел[ьья]\s?фри", r"\bфри\b",
@@ -156,9 +167,6 @@ def is_topic_by_regex(text: str) -> bool:
     text_lower = text.lower()
     return any(re.search(pattern, text_lower) for pattern in all_patterns)
 
-# =========================================
-# 11. Дополнительные функции фильтрации
-# =========================================
 def is_health_restriction_question(text: str) -> bool:
     patterns = [
         r"\bне могу\b", r"\bиз-за\b", r"\bболит\b", r"\bболь\b",
@@ -310,7 +318,7 @@ async def greet_user(message: types.Message):
     await message.answer("Привет! Чем могу помочь по фитнесу, питанию и здоровому образу жизни?")
 
 # =========================================
-# 18. Стартовая команда
+# 18. Стартовая команда с Reply Keyboard
 # =========================================
 @dp.message(CommandStart())
 async def start(message: types.Message, state: FSMContext):
@@ -331,14 +339,23 @@ async def start(message: types.Message, state: FSMContext):
         )
         await state.set_state(Onboarding.waiting_for_gender)
     else:
+        # Если данные уже есть, отправляем клавиатуру с главным меню
         await message.answer(
-            "Параметры уже заданы. Можешь задать вопрос по фитнесу и питанию!\n"
-            "Если хочешь изменить цель, напиши: «поменяй мою цель на ...»",
-            parse_mode=ParseMode.MARKDOWN
+            "Параметры уже заданы. Можешь выбрать действие в меню:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_kb  # <-- прикрепляем Reply Keyboard
         )
 
 # =========================================
-# 19. Сбор параметров пошагово
+# 19. Хендлер для кнопки "Изменить данные"
+# =========================================
+@dp.message(lambda msg: msg.text == "Изменить данные")
+async def handle_change_data(message: types.Message, state: FSMContext):
+    await message.answer("Хорошо, давай обновим твои параметры.\nУкажи свой пол:")
+    await state.set_state(Onboarding.waiting_for_gender)
+
+# =========================================
+# 20. Сбор параметров пошагово
 # =========================================
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
@@ -414,7 +431,7 @@ async def process_goal(message: types.Message, state: FSMContext):
     await state.clear()
 
 # =========================================
-# 20. Обновление цели
+# 21. Обновление цели (обработка фразы "поменяй мою цель")
 # =========================================
 @dp.message(lambda msg: "поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower())
 async def update_goal(message: types.Message):
@@ -429,7 +446,7 @@ async def update_goal(message: types.Message):
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
 # =========================================
-# 21. Основной обработчик сообщений
+# 22. Основной обработчик сообщений
 # =========================================
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
 async def handle_message(message: types.Message):
@@ -460,7 +477,7 @@ async def handle_message(message: types.Message):
     await update_history(user_id, "bot", response)
 
 # =========================================
-# 22. Точка входа
+# 23. Точка входа
 # =========================================
 async def main():
     await dp.start_polling(bot)
