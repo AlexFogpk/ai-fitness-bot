@@ -7,7 +7,7 @@ import difflib  # для fuzzy matching
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton  # <-- добавили импорт клавиатуры
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton  # импорт для работы с клавиатурой
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -300,7 +300,7 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     return response.choices[0].message.content
 
 # =========================================
-# 16. FSM для сбора параметров
+# 16. FSM для сбора параметров (онбординг)
 # =========================================
 class Onboarding(StatesGroup):
     waiting_for_gender = State()
@@ -311,14 +311,20 @@ class Onboarding(StatesGroup):
     waiting_for_goal = State()
 
 # =========================================
-# 17. Хендлер для приветствий (fuzzy matching)
+# 17. FSM для изменения цели (короткий опрос)
+# =========================================
+class ChangeGoal(StatesGroup):
+    waiting_for_new_goal = State()
+
+# =========================================
+# 18. Хендлер для приветствий (fuzzy matching)
 # =========================================
 @dp.message(lambda msg: is_greeting_fuzzy(msg.text))
 async def greet_user(message: types.Message):
     await message.answer("Привет! Чем могу помочь по фитнесу, питанию и здоровому образу жизни?")
 
 # =========================================
-# 18. Стартовая команда с Reply Keyboard
+# 19. Стартовая команда с показом клавиатуры
 # =========================================
 @dp.message(CommandStart())
 async def start(message: types.Message, state: FSMContext):
@@ -343,19 +349,41 @@ async def start(message: types.Message, state: FSMContext):
         await message.answer(
             "Параметры уже заданы. Можешь выбрать действие в меню:",
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_kb  # <-- прикрепляем Reply Keyboard
+            reply_markup=main_menu_kb
         )
 
-# =========================================
-# 19. Хендлер для кнопки "Изменить данные"
-# =========================================
+#########################
+# 20. Логика для кнопок меню
+#########################
+
+# 20.1. Изменить данные – повторный опрос
 @dp.message(lambda msg: msg.text == "Изменить данные")
 async def handle_change_data(message: types.Message, state: FSMContext):
-    await message.answer("Хорошо, давай обновим твои параметры.\nУкажи свой пол:")
+    await message.answer(
+        "Хорошо! Давай заново укажем параметры.\n\n"
+        "Для начала, укажи свой **пол** (например: мужчина или женщина).",
+        parse_mode=ParseMode.MARKDOWN
+    )
     await state.set_state(Onboarding.waiting_for_gender)
 
+# 20.2. Изменить цель – запуск короткого FSM для ввода новой цели
+@dp.message(lambda msg: msg.text == "Изменить цель")
+async def handle_change_goal_button(message: types.Message, state: FSMContext):
+    await message.answer(
+        "Окей! Введи, пожалуйста, новую цель (например: похудение, набор массы и т.д.)"
+    )
+    await state.set_state(ChangeGoal.waiting_for_new_goal)
+
+@dp.message(ChangeGoal.waiting_for_new_goal)
+async def process_new_goal(message: types.Message, state: FSMContext):
+    new_goal = message.text.strip()
+    user_id = str(message.from_user.id)
+    db.collection("users").document(user_id).update({"params.цель": new_goal})
+    await message.answer(f"Цель обновлена на: *{new_goal}*", parse_mode=ParseMode.MARKDOWN)
+    await state.clear()
+
 # =========================================
-# 20. Сбор параметров пошагово
+# 21. Сбор параметров пошагово (онбординг)
 # =========================================
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
@@ -431,7 +459,7 @@ async def process_goal(message: types.Message, state: FSMContext):
     await state.clear()
 
 # =========================================
-# 21. Обновление цели (обработка фразы "поменяй мою цель")
+# 22. Обновление цели через текстовую фразу (альтернативный вариант)
 # =========================================
 @dp.message(lambda msg: "поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower())
 async def update_goal(message: types.Message):
@@ -446,7 +474,7 @@ async def update_goal(message: types.Message):
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
 # =========================================
-# 22. Основной обработчик сообщений
+# 23. Основной обработчик сообщений
 # =========================================
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
 async def handle_message(message: types.Message):
@@ -477,7 +505,7 @@ async def handle_message(message: types.Message):
     await update_history(user_id, "bot", response)
 
 # =========================================
-# 23. Точка входа
+# 24. Точка входа
 # =========================================
 async def main():
     await dp.start_polling(bot)
