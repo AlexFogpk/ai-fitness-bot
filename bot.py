@@ -60,7 +60,7 @@ dp = Dispatcher(storage=storage)
 # 6. Клавиатуры
 # =========================================
 
-# Главный экран
+# Главное меню:
 btn_my_progress = KeyboardButton(text="📊 Мой прогресс")
 btn_diary = KeyboardButton(text="📒 Дневник питания")
 btn_calculate_kbju = KeyboardButton(text="🍽 Посчитать КБЖУ")
@@ -83,7 +83,7 @@ main_menu_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура для выбора уровня активности
+# Клавиатура выбора уровня активности:
 activity_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Сидячий (1.2)")],
@@ -95,27 +95,29 @@ activity_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура отмены
+# Клавиатура отмены:
 btn_cancel = KeyboardButton(text="🔙 Отмена")
 cancel_kb = ReplyKeyboardMarkup(keyboard=[[btn_cancel]], resize_keyboard=True)
 
-# Клавиатура действий для дневника питания
+# Клавиатура действий для Дневника питания:
 diary_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Добавить запись (питание)")],
         [KeyboardButton(text="✏️ Изменить последнюю запись (питание)")],
         [KeyboardButton(text="🗑 Удалить последнюю запись (питание)")],
+        [KeyboardButton(text="📌 Последние записи (питание)")],
         [KeyboardButton(text="🔙 В главное меню")]
     ],
     resize_keyboard=True
 )
 
-# Клавиатура действий для прогресса
+# Клавиатура действий для Раздела "Мой прогресс":
 progress_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Добавить запись (прогресс)")],
         [KeyboardButton(text="✏️ Изменить последнюю запись (прогресс)")],
         [KeyboardButton(text="🗑 Удалить последнюю запись (прогресс)")],
+        [KeyboardButton(text="📌 Последние показатели (прогресс)")],
         [KeyboardButton(text="🔙 В главное меню")]
     ],
     resize_keyboard=True
@@ -137,22 +139,20 @@ class Onboarding(StatesGroup):
 class ChangeGoal(StatesGroup):
     waiting_for_new_goal = State()
 
-# FSM для добавления записи в дневник питания
+# Для Дневника питания:
 class DiaryEntry(StatesGroup):
     waiting_for_meal = State()
     waiting_for_quantity = State()
 
-# FSM для редактирования записи в дневнике питания
 class DiaryEdit(StatesGroup):
     waiting_for_new_meal = State()
     waiting_for_new_quantity = State()
 
-# FSM для добавления записи в раздел "Мой прогресс"
+# Для раздела "Мой прогресс":
 class ProgressEntry(StatesGroup):
     waiting_for_weight = State()
     waiting_for_measurements = State()
 
-# FSM для редактирования записи в разделе "Мой прогресс"
 class EditProgressEntry(StatesGroup):
     waiting_for_new_weight = State()
     waiting_for_new_measurements = State()
@@ -190,7 +190,7 @@ async def send_split_message(chat_id, text, parse_mode=None):
     for part in parts:
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
 
-# (Функции для фильтрации тематики, GPT fallback, update_history, ask_gpt остаются без изменений)
+# Функции для фильтрации и GPT (оставляем без изменений)
 GREETINGS = [
     "привет", "здравствуйте", "добрый день", "доброе утро", "хай", "приветствую",
     "здарова", "салют", "хелло", "хелоу", "хей", "хэй", "йоу",
@@ -339,6 +339,7 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
 # =========================================
 # 9. Хендлеры приветствий и стартовая команда
 # =========================================
+
 @dp.message(lambda msg: is_greeting_fuzzy(msg.text))
 async def greet(message: types.Message):
     await message.answer("Привет! Чем могу помочь по фитнесу, питанию и здоровому образу жизни?")
@@ -371,6 +372,7 @@ async def start(message: types.Message, state: FSMContext):
 # =========================================
 # 10. Хендлеры основных кнопок меню
 # =========================================
+
 @dp.message(lambda msg: msg.text == "📝 Изменить данные")
 async def handle_change_data(message: types.Message, state: FSMContext):
     await message.answer(
@@ -447,6 +449,12 @@ async def handle_calculate_kbju(message: types.Message):
         f"Учти, что это приблизительный расчёт, скорректированный с учётом твоей активности и цели ({params.get('цель', 'N/A')})."
     )
     await message.answer(response_text)
+
+# Хендлер для возврата в главное меню (используется в обоих разделах)
+@dp.message(lambda msg: msg.text == "🔙 В главное меню")
+async def back_to_main_menu(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🔸 Главное меню", reply_markup=main_menu_kb)
 
 # =========================================
 # 11. Хендлеры для раздела "Дневник питания"
@@ -541,7 +549,7 @@ async def update_diary_quantity(message: types.Message, state: FSMContext):
     if updated:
         await message.answer(f"✅ Запись изменена на:\n• {new_meal}, {new_quantity}", reply_markup=diary_actions_kb)
     else:
-        await message.answer("❌ Нет записи для редактирования.", reply_markup=diary_actions_kb)
+        await message.answer("❌ Нет записи для изменения.", reply_markup=diary_actions_kb)
     await state.clear()
 
 @dp.message(lambda msg: msg.text == "🗑 Удалить последнюю запись (питание)")
@@ -558,6 +566,24 @@ async def delete_last_diary_entry(message: types.Message):
         await message.answer("🗑 Последняя запись удалена.", reply_markup=diary_actions_kb)
     else:
         await message.answer("❌ Нет записей для удаления.", reply_markup=diary_actions_kb)
+
+@dp.message(lambda msg: msg.text == "📌 Последние записи (питание)")
+async def last_diary_entries(message: types.Message):
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(3).stream()
+    entries = [doc.to_dict() for doc in docs]
+    if entries:
+        text = "📌 Твои последние записи:\n"
+        for entry in entries:
+            timestamp = entry.get("timestamp")
+            date_str = timestamp.strftime('%d.%m.%Y %H:%M') if isinstance(timestamp, datetime) else "N/A"
+            meal = entry.get("meal", "N/A")
+            quantity = entry.get("quantity", "N/A")
+            text += f"• {meal} - {quantity} ({date_str})\n"
+        await message.answer(text, reply_markup=diary_actions_kb)
+    else:
+        await message.answer("❌ У тебя пока нет записей о питании.", reply_markup=diary_actions_kb)
 
 # =========================================
 # 12. Хендлеры для раздела "Мой прогресс"
@@ -673,9 +699,32 @@ async def delete_last_progress_entry(message: types.Message):
     else:
         await message.answer("❌ Нет записей для удаления.", reply_markup=progress_actions_kb)
 
+@dp.message(lambda msg: msg.text == "📌 Последние показатели (прогресс)")
+async def last_progress_entry(message: types.Message):
+    user_id = str(message.from_user.id)
+    progress_ref = db.collection("users").document(user_id).collection("progress")
+    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    last_entry = None
+    for doc in docs:
+        last_entry = doc.to_dict()
+        break
+    if last_entry:
+        timestamp = last_entry.get("timestamp")
+        date_str = timestamp.strftime("%d.%m.%Y") if isinstance(timestamp, datetime) else "N/A"
+        await message.answer(
+            f"📌 Твои последние показатели:\n"
+            f"• Вес: {last_entry.get('weight', 'N/A')} кг\n"
+            f"• Рост: {last_entry.get('height', 'N/A')} см\n"
+            f"• Дата: {date_str}",
+            reply_markup=progress_actions_kb
+        )
+    else:
+        await message.answer("❌ У тебя пока нет записей.", reply_markup=progress_actions_kb)
+
 # =========================================
-# 13. Остальные хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
+# 13. Хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
 # =========================================
+
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
 async def handle_training_plans(message: types.Message):
     await message.answer("Скоро здесь будут твои персональные планы тренировок! 🏋️‍♂️📆")
@@ -711,6 +760,7 @@ async def handle_subscription(message: types.Message):
 # =========================================
 # 14. Онбординг – сбор параметров
 # =========================================
+
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
     gender = message.text.strip()
@@ -737,8 +787,7 @@ async def process_age(message: types.Message, state: FSMContext):
     age = message.text.strip()
     await state.update_data(age=age)
     await message.answer(
-        "Есть ли у тебя какие-то **ограничения по здоровью**?\n"
-        "(Например, «нет ограничений» или «болит колено»)",
+        "Есть ли у тебя какие-то **ограничения по здоровью**?\n(Например, «нет ограничений» или «болит колено»)",
         parse_mode=ParseMode.MARKDOWN
     )
     await state.set_state(Onboarding.waiting_for_health)
@@ -754,11 +803,7 @@ async def process_health(message: types.Message, state: FSMContext):
 async def process_goal(message: types.Message, state: FSMContext):
     goal = message.text.strip()
     await state.update_data(goal=goal)
-    await message.answer(
-        "Выбери уровень физической активности:",
-        reply_markup=activity_kb,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await message.answer("Выбери уровень физической активности:", reply_markup=activity_kb, parse_mode=ParseMode.MARKDOWN)
     await state.set_state(Onboarding.waiting_for_activity)
 
 @dp.message(Onboarding.waiting_for_activity)
@@ -795,8 +840,9 @@ async def process_activity(message: types.Message, state: FSMContext):
     await state.clear()
 
 # =========================================
-# 15. Обновление цели через текстовую фразу (альтернативный вариант)
+# 15. Обновление цели через текстовую фразу
 # =========================================
+
 @dp.message(lambda msg: "поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower())
 async def update_goal(message: types.Message):
     text_lower = message.text.lower()
@@ -810,8 +856,9 @@ async def update_goal(message: types.Message):
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
 # =========================================
-# 16. Основной обработчик сообщений (общий fallback)
+# 16. Общий fallback-хендлер
 # =========================================
+
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
 async def handle_message(message: types.Message):
     user_id = str(message.from_user.id)
@@ -843,6 +890,7 @@ async def handle_message(message: types.Message):
 # =========================================
 # 17. Точка входа
 # =========================================
+
 async def main():
     await dp.start_polling(bot)
 
