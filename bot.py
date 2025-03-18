@@ -2,13 +2,13 @@ import logging
 import asyncio
 import os
 import re
-import difflib  # для fuzzy matching
+import difflib
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton  # импорт для работы с клавиатурой
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -53,14 +53,14 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # =========================================
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()  # Храним состояние в памяти
+storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 # =========================================
-# 6. Reply Keyboard для главного меню и дополнительные клавиатуры
+# 6. Клавиатуры
 # =========================================
 
-# Кнопки главного меню:
+# Главный экран
 btn_my_progress = KeyboardButton(text="📊 Мой прогресс")
 btn_diary = KeyboardButton(text="📒 Дневник питания")
 btn_calculate_kbju = KeyboardButton(text="🍽 Посчитать КБЖУ")
@@ -83,7 +83,7 @@ main_menu_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура выбора уровня активности:
+# Клавиатура для выбора уровня активности
 activity_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Сидячий (1.2)")],
@@ -95,25 +95,28 @@ activity_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура отмены:
+# Клавиатура отмены
 btn_cancel = KeyboardButton(text="🔙 Отмена")
 cancel_kb = ReplyKeyboardMarkup(keyboard=[[btn_cancel]], resize_keyboard=True)
 
-# Клавиатура для действий с последней записью (редактировать/удалить):
-edit_last_entry_kb = ReplyKeyboardMarkup(
+# Клавиатура действий для дневника питания
+diary_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✏️ Изменить последнюю запись")],
-        [KeyboardButton(text="🗑 Удалить последнюю запись")],
+        [KeyboardButton(text="✅ Добавить запись (питание)")],
+        [KeyboardButton(text="✏️ Изменить последнюю запись (питание)")],
+        [KeyboardButton(text="🗑 Удалить последнюю запись (питание)")],
         [KeyboardButton(text="🔙 В главное меню")]
     ],
     resize_keyboard=True
 )
 
-# Клавиатура для раздела "Мой прогресс":
-progress_kb = ReplyKeyboardMarkup(
+# Клавиатура действий для прогресса
+progress_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📈 Добавить показатели"), KeyboardButton(text="📅 Посмотреть прогресс")],
-        [KeyboardButton(text="🔙 Назад в меню")]
+        [KeyboardButton(text="✅ Добавить запись (прогресс)")],
+        [KeyboardButton(text="✏️ Изменить последнюю запись (прогресс)")],
+        [KeyboardButton(text="🗑 Удалить последнюю запись (прогресс)")],
+        [KeyboardButton(text="🔙 В главное меню")]
     ],
     resize_keyboard=True
 )
@@ -121,6 +124,7 @@ progress_kb = ReplyKeyboardMarkup(
 # =========================================
 # 7. FSM состояния
 # =========================================
+
 class Onboarding(StatesGroup):
     waiting_for_gender = State()
     waiting_for_weight = State()
@@ -133,21 +137,30 @@ class Onboarding(StatesGroup):
 class ChangeGoal(StatesGroup):
     waiting_for_new_goal = State()
 
-class FoodDiary(StatesGroup):
-    waiting_for_entry = State()
+# FSM для добавления записи в дневник питания
+class DiaryEntry(StatesGroup):
+    waiting_for_meal = State()
+    waiting_for_quantity = State()
 
-class Progress(StatesGroup):
-    choosing_action = State()
+# FSM для редактирования записи в дневнике питания
+class DiaryEdit(StatesGroup):
+    waiting_for_new_meal = State()
+    waiting_for_new_quantity = State()
+
+# FSM для добавления записи в раздел "Мой прогресс"
+class ProgressEntry(StatesGroup):
     waiting_for_weight = State()
     waiting_for_measurements = State()
 
-class EditDiaryEntry(StatesGroup):
-    waiting_for_meal = State()
-    waiting_for_quantity = State()
+# FSM для редактирования записи в разделе "Мой прогресс"
+class EditProgressEntry(StatesGroup):
+    waiting_for_new_weight = State()
+    waiting_for_new_measurements = State()
 
 # =========================================
 # 8. Вспомогательные функции
 # =========================================
+
 def fix_markdown_telegram(text: str) -> str:
     lines = text.split("\n")
     new_lines = []
@@ -177,7 +190,7 @@ async def send_split_message(chat_id, text, parse_mode=None):
     for part in parts:
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
 
-# (Остальные вспомогательные функции для фильтрации и работы с GPT оставляем без изменений)
+# (Функции для фильтрации тематики, GPT fallback, update_history, ask_gpt остаются без изменений)
 GREETINGS = [
     "привет", "здравствуйте", "добрый день", "доброе утро", "хай", "приветствую",
     "здарова", "салют", "хелло", "хелоу", "хей", "хэй", "йоу",
@@ -188,9 +201,6 @@ def is_greeting_fuzzy(text: str) -> bool:
     text_lower = text.lower().strip()
     matches = difflib.get_close_matches(text_lower, GREETINGS, n=1, cutoff=0.8)
     return len(matches) > 0
-
-# Для краткости остальные функции (is_topic_by_regex, is_health_restriction_question, is_in_whitelist, is_in_blacklist, is_fitness_question_combined, is_topic_by_gpt, update_history, ask_gpt)
-# остаются без изменений (см. предыдущие реализации).
 
 def is_topic_by_regex(text: str) -> bool:
     patterns = [
@@ -247,7 +257,6 @@ async def is_fitness_question_combined(user_id: str, text: str) -> bool:
         return True
     if is_topic_by_regex(text):
         return True
-    # Проверка через GPT fallback
     return await is_topic_by_gpt(user_id, text)
 
 async def is_topic_by_gpt(user_id: str, text: str) -> bool:
@@ -360,7 +369,7 @@ async def start(message: types.Message, state: FSMContext):
         )
 
 # =========================================
-# 10. Хендлеры для основных кнопок меню
+# 10. Хендлеры основных кнопок меню
 # =========================================
 @dp.message(lambda msg: msg.text == "📝 Изменить данные")
 async def handle_change_data(message: types.Message, state: FSMContext):
@@ -440,126 +449,103 @@ async def handle_calculate_kbju(message: types.Message):
     await message.answer(response_text)
 
 # =========================================
-# 11. Хендлеры для раздела "Мой прогресс"
-# =========================================
-
-@dp.message(lambda msg: msg.text == "📊 Мой прогресс")
-async def handle_progress_menu(message: types.Message, state: FSMContext):
-    await message.answer("Выбери, что хочешь сделать:", reply_markup=progress_kb)
-    await state.set_state(Progress.choosing_action)
-
-@dp.message(Progress.choosing_action)
-async def process_progress_action(message: types.Message, state: FSMContext):
-    if message.text == "📈 Добавить показатели":
-        await message.answer("Напиши свой текущий вес (кг):")
-        await state.set_state(Progress.waiting_for_weight)
-    elif message.text == "📅 Посмотреть прогресс":
-        user_id = str(message.from_user.id)
-        docs = db.collection("users").document(user_id).collection("progress").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(5).stream()
-        entries = []
-        for doc in docs:
-            data = doc.to_dict()
-            entries.append(f"🗓 {data['timestamp'].strftime('%d.%m.%Y %H:%M')}\n⚖️ Вес: {data['weight']} кг\n📏 Обхваты: {data.get('measurements', 'не указаны')}")
-        if entries:
-            recent_entries = "\n\n".join(entries)
-            await message.answer(f"📅 **Последние показатели:**\n\n{recent_entries}", parse_mode=ParseMode.MARKDOWN, reply_markup=progress_kb)
-        else:
-            await message.answer("Пока нет записей. Добавь первые показатели через «📈 Добавить показатели».", reply_markup=progress_kb)
-    elif message.text == "🔙 Назад в меню":
-        await message.answer("Возвращаемся в главное меню:", reply_markup=main_menu_kb)
-        await state.clear()
-    else:
-        await message.answer("Выбери один из вариантов, пожалуйста.", reply_markup=progress_kb)
-
-@dp.message(Progress.waiting_for_weight)
-async def process_progress_weight(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Отмена":
-        await message.answer("Запись отменена. Возвращаемся в главное меню.", reply_markup=main_menu_kb)
-        await state.clear()
-        return
-    weight = message.text.strip()
-    await state.update_data(weight=weight)
-    await message.answer("Теперь укажи свои обхваты (например: талия, грудь, бёдра), или напиши «пропустить».", reply_markup=cancel_kb)
-    await state.set_state(Progress.waiting_for_measurements)
-
-@dp.message(Progress.waiting_for_measurements)
-async def process_progress_measurements(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Отмена":
-        await message.answer("Запись отменена. Возвращаемся в главное меню.", reply_markup=main_menu_kb)
-        await state.clear()
-        return
-    measurements = message.text.strip()
-    data = await state.get_data()
-    weight = data["weight"]
-    timestamp = datetime.now()
-    entry = {
-        "timestamp": timestamp,
-        "weight": weight,
-        "measurements": measurements if measurements.lower() != "пропустить" else "не указаны"
-    }
-    user_id = str(message.from_user.id)
-    db.collection("users").document(user_id).collection("progress").add(entry)
-    await message.answer(
-        f"✅ Записал твои показатели:\n\n"
-        f"🗓 {timestamp.strftime('%d.%m.%Y %H:%M')}\n⚖️ Вес: {weight} кг\n📏 Обхваты: {entry['measurements']}",
-        reply_markup=progress_kb
-    )
-    await state.set_state(Progress.choosing_action)
-
-# =========================================
-# 12. Хендлеры для раздела "Дневник питания" с возможностью отмены и редактирования
+# 11. Хендлеры для раздела "Дневник питания"
 # =========================================
 
 @dp.message(lambda msg: msg.text == "📒 Дневник питания")
-async def handle_food_diary(message: types.Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    docs = db.collection("users").document(user_id).collection("diary").order_by("timestamp", direction=firestore.Query.ASCENDING).stream()
-    entries = []
-    for doc in docs:
-        data = doc.to_dict()
-        entries.append(f"🗓 {data['timestamp'].strftime('%d.%m.%Y %H:%M')}\n🍽 {data['meal']}, {data.get('quantity', '')}")
-    if entries:
-        diary_message = "📒 **Последние записи в дневнике питания:**\n\n" + "\n\n".join(entries[-5:])
-    else:
-        diary_message = "📒 Дневник питания пока пуст. Сделай первую запись!"
-    await message.answer(
-        f"{diary_message}\n\n"
-        "Напиши, что ты съел сейчас (например: «Обед: гречка, куриная грудка, овощной салат»), или нажми «🔙 Отмена» для возврата в меню:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=cancel_kb
-    )
-    await state.set_state(FoodDiary.waiting_for_entry)
+async def open_diary_menu(message: types.Message):
+    await message.answer("📒 Что хочешь сделать в дневнике питания?", reply_markup=diary_actions_kb)
 
-@dp.message(FoodDiary.waiting_for_entry)
-async def save_food_entry(message: types.Message, state: FSMContext):
+@dp.message(lambda msg: msg.text == "✅ Добавить запись (питание)")
+async def add_diary_entry(message: types.Message, state: FSMContext):
+    await message.answer("Введи название блюда:", reply_markup=cancel_kb)
+    await state.set_state(DiaryEntry.waiting_for_meal)
+
+@dp.message(DiaryEntry.waiting_for_meal)
+async def process_diary_meal(message: types.Message, state: FSMContext):
     if message.text == "🔙 Отмена":
-        await message.answer("Запись отменена. Возвращаемся в главное меню.", reply_markup=main_menu_kb)
+        await message.answer("Запись отменена.", reply_markup=diary_actions_kb)
         await state.clear()
         return
+    await state.update_data(meal=message.text.strip())
+    await message.answer("Теперь введи количество:", reply_markup=cancel_kb)
+    await state.set_state(DiaryEntry.waiting_for_quantity)
+
+@dp.message(DiaryEntry.waiting_for_quantity)
+async def process_diary_quantity(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Запись отменена.", reply_markup=diary_actions_kb)
+        await state.clear()
+        return
+    quantity = message.text.strip()
+    data = await state.get_data()
+    meal = data.get("meal")
     user_id = str(message.from_user.id)
-    meal = message.text.strip()
-    timestamp = datetime.now()
-    entry = {
-        "timestamp": timestamp,
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    diary_ref.add({
         "meal": meal,
-        "quantity": ""
-    }
-    db.collection("users").document(user_id).collection("diary").add(entry)
-    await message.answer(
-        f"✅ Запись добавлена:\n• {meal}",
-        reply_markup=edit_last_entry_kb,
-        parse_mode=ParseMode.MARKDOWN
-    )
+        "quantity": quantity,
+        "timestamp": datetime.now()
+    })
+    await message.answer(f"✅ Добавлена запись:\n• {meal}, {quantity}", reply_markup=diary_actions_kb)
     await state.clear()
 
-# Хендлер возврата в главное меню
-@dp.message(lambda msg: msg.text == "🔙 В главное меню")
-async def go_back_main(message: types.Message):
-    await message.answer("Главное меню:", reply_markup=main_menu_kb)
+@dp.message(lambda msg: msg.text == "✏️ Изменить последнюю запись (питание)")
+async def edit_last_diary_entry(message: types.Message, state: FSMContext):
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    last_entry = None
+    for doc in docs:
+        last_entry = doc
+        break
+    if last_entry:
+        await state.update_data(last_doc_id=last_entry.id)
+        await message.answer("Введи новое название блюда:", reply_markup=cancel_kb)
+        await state.set_state(DiaryEdit.waiting_for_new_meal)
+    else:
+        await message.answer("❌ Нет записей для изменения.", reply_markup=diary_actions_kb)
 
-# Удаление последней записи из дневника питания
-@dp.message(lambda msg: msg.text == "🗑 Удалить последнюю запись")
-async def delete_last_entry(message: types.Message):
+@dp.message(DiaryEdit.waiting_for_new_meal)
+async def update_diary_meal(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Редактирование отменено.", reply_markup=diary_actions_kb)
+        await state.clear()
+        return
+    await state.update_data(new_meal=message.text.strip())
+    await message.answer("Теперь введи новое количество:", reply_markup=cancel_kb)
+    await state.set_state(DiaryEdit.waiting_for_new_quantity)
+
+@dp.message(DiaryEdit.waiting_for_new_quantity)
+async def update_diary_quantity(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Редактирование отменено.", reply_markup=diary_actions_kb)
+        await state.clear()
+        return
+    new_quantity = message.text.strip()
+    data = await state.get_data()
+    last_doc_id = data.get("last_doc_id")
+    new_meal = data.get("new_meal")
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    updated = False
+    for doc in docs:
+        doc.reference.update({
+            "meal": new_meal,
+            "quantity": new_quantity,
+            "timestamp": datetime.now()
+        })
+        updated = True
+        break
+    if updated:
+        await message.answer(f"✅ Запись изменена на:\n• {new_meal}, {new_quantity}", reply_markup=diary_actions_kb)
+    else:
+        await message.answer("❌ Нет записи для редактирования.", reply_markup=diary_actions_kb)
+    await state.clear()
+
+@dp.message(lambda msg: msg.text == "🗑 Удалить последнюю запись (питание)")
+async def delete_last_diary_entry(message: types.Message):
     user_id = str(message.from_user.id)
     diary_ref = db.collection("users").document(user_id).collection("diary")
     docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
@@ -569,56 +555,126 @@ async def delete_last_entry(message: types.Message):
         deleted = True
         break
     if deleted:
-        await message.answer("🗑 Последняя запись удалена!", reply_markup=main_menu_kb)
+        await message.answer("🗑 Последняя запись удалена.", reply_markup=diary_actions_kb)
     else:
-        await message.answer("❌ Нет записей для удаления.", reply_markup=main_menu_kb)
+        await message.answer("❌ Нет записей для удаления.", reply_markup=diary_actions_kb)
 
-# Редактирование последней записи из дневника питания – запуск FSM
-@dp.message(lambda msg: msg.text == "✏️ Изменить последнюю запись")
-async def edit_last_entry(message: types.Message, state: FSMContext):
-    await message.answer("Введи исправленное название блюда:", reply_markup=cancel_kb)
-    await state.set_state(EditDiaryEntry.waiting_for_meal)
+# =========================================
+# 12. Хендлеры для раздела "Мой прогресс"
+# =========================================
 
-@dp.message(EditDiaryEntry.waiting_for_meal)
-async def edit_meal(message: types.Message, state: FSMContext):
+@dp.message(lambda msg: msg.text == "📊 Мой прогресс")
+async def open_progress_menu(message: types.Message):
+    await message.answer("📊 Что хочешь сделать в разделе прогресса?", reply_markup=progress_actions_kb)
+
+@dp.message(lambda msg: msg.text == "✅ Добавить запись (прогресс)")
+async def add_progress_entry(message: types.Message, state: FSMContext):
+    await message.answer("Введи свой текущий вес (кг):", reply_markup=cancel_kb)
+    await state.set_state(ProgressEntry.waiting_for_weight)
+
+@dp.message(ProgressEntry.waiting_for_weight)
+async def process_progress_weight(message: types.Message, state: FSMContext):
     if message.text == "🔙 Отмена":
-        await message.answer("Редактирование отменено.", reply_markup=main_menu_kb)
+        await message.answer("Запись отменена.", reply_markup=progress_actions_kb)
         await state.clear()
         return
-    meal = message.text.strip()
-    await state.update_data(meal=meal)
-    await message.answer("Теперь введи исправленное количество (например, 200 г или 1 порция):", reply_markup=cancel_kb)
-    await state.set_state(EditDiaryEntry.waiting_for_quantity)
+    await state.update_data(weight=message.text.strip())
+    await message.answer("Теперь введи обхваты (например: талия, грудь, бёдра) или напиши «пропустить»:", reply_markup=cancel_kb)
+    await state.set_state(ProgressEntry.waiting_for_measurements)
 
-@dp.message(EditDiaryEntry.waiting_for_quantity)
-async def edit_quantity(message: types.Message, state: FSMContext):
+@dp.message(ProgressEntry.waiting_for_measurements)
+async def process_progress_measurements(message: types.Message, state: FSMContext):
     if message.text == "🔙 Отмена":
-        await message.answer("Редактирование отменено.", reply_markup=main_menu_kb)
+        await message.answer("Запись отменена.", reply_markup=progress_actions_kb)
         await state.clear()
         return
-    quantity = message.text.strip()
+    measurements = message.text.strip()
     data = await state.get_data()
-    meal = data.get("meal")
+    weight = data.get("weight")
+    timestamp = datetime.now()
+    entry = {
+        "timestamp": timestamp,
+        "weight": weight,
+        "measurements": measurements if measurements.lower() != "пропустить" else "не указаны"
+    }
     user_id = str(message.from_user.id)
-    diary_ref = db.collection("users").document(user_id).collection("diary")
-    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    db.collection("users").document(user_id).collection("progress").add(entry)
+    await message.answer(
+        f"✅ Записал твои показатели:\n🗓 {timestamp.strftime('%d.%m.%Y %H:%M')}\n⚖️ Вес: {weight} кг\n📏 Обхваты: {entry['measurements']}",
+        reply_markup=progress_actions_kb
+    )
+    await state.clear()
+
+@dp.message(lambda msg: msg.text == "✏️ Изменить последнюю запись (прогресс)")
+async def edit_last_progress_entry(message: types.Message, state: FSMContext):
+    user_id = str(message.from_user.id)
+    progress_ref = db.collection("users").document(user_id).collection("progress")
+    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    last_entry = None
+    for doc in docs:
+        last_entry = doc
+        break
+    if last_entry:
+        await state.update_data(last_doc_id=last_entry.id)
+        await message.answer("Введи новый вес (кг):", reply_markup=cancel_kb)
+        await state.set_state(EditProgressEntry.waiting_for_new_weight)
+    else:
+        await message.answer("❌ Нет записей для изменения.", reply_markup=progress_actions_kb)
+
+@dp.message(EditProgressEntry.waiting_for_new_weight)
+async def update_progress_weight(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Редактирование отменено.", reply_markup=progress_actions_kb)
+        await state.clear()
+        return
+    await state.update_data(new_weight=message.text.strip())
+    await message.answer("Теперь введи новые обхваты:", reply_markup=cancel_kb)
+    await state.set_state(EditProgressEntry.waiting_for_new_measurements)
+
+@dp.message(EditProgressEntry.waiting_for_new_measurements)
+async def update_progress_measurements(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Редактирование отменено.", reply_markup=progress_actions_kb)
+        await state.clear()
+        return
+    new_measurements = message.text.strip()
+    data = await state.get_data()
+    new_weight = data.get("new_weight")
+    user_id = str(message.from_user.id)
+    progress_ref = db.collection("users").document(user_id).collection("progress")
+    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
     updated = False
     for doc in docs:
         doc.reference.update({
-            "meal": meal,
-            "quantity": quantity,
+            "weight": new_weight,
+            "measurements": new_measurements,
             "timestamp": datetime.now()
         })
         updated = True
         break
     if updated:
-        await message.answer(f"✅ Запись успешно изменена на:\n• {meal}, {quantity}", reply_markup=main_menu_kb)
+        await message.answer(f"✅ Запись изменена на:\n⚖️ Вес: {new_weight} кг\n📏 Обхваты: {new_measurements}", reply_markup=progress_actions_kb)
     else:
-        await message.answer("❌ Ошибка: нет записи для редактирования.", reply_markup=main_menu_kb)
+        await message.answer("❌ Нет записи для изменения.", reply_markup=progress_actions_kb)
     await state.clear()
 
+@dp.message(lambda msg: msg.text == "🗑 Удалить последнюю запись (прогресс)")
+async def delete_last_progress_entry(message: types.Message):
+    user_id = str(message.from_user.id)
+    progress_ref = db.collection("users").document(user_id).collection("progress")
+    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    deleted = False
+    for doc in docs:
+        doc.reference.delete()
+        deleted = True
+        break
+    if deleted:
+        await message.answer("🗑 Последняя запись удалена.", reply_markup=progress_actions_kb)
+    else:
+        await message.answer("❌ Нет записей для удаления.", reply_markup=progress_actions_kb)
+
 # =========================================
-# 13. Остальные хендлеры для раздела "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
+# 13. Остальные хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
 # =========================================
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
 async def handle_training_plans(message: types.Message):
@@ -653,7 +709,7 @@ async def handle_subscription(message: types.Message):
     )
 
 # =========================================
-# 14. Сбор параметров (онбординг)
+# 14. Онбординг – сбор параметров
 # =========================================
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
@@ -709,10 +765,7 @@ async def process_goal(message: types.Message, state: FSMContext):
 async def process_activity(message: types.Message, state: FSMContext):
     activity_text = message.text.strip()
     match = re.search(r"\(([\d\.]+)\)", activity_text)
-    if match:
-        activity_factor = float(match.group(1))
-    else:
-        activity_factor = 1.2
+    activity_factor = float(match.group(1)) if match else 1.2
     await state.update_data(activity=activity_factor)
     data = await state.get_data()
     user_id = str(message.from_user.id)
