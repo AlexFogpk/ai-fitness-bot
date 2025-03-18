@@ -57,7 +57,7 @@ storage = MemoryStorage()  # Храним состояние в памяти
 dp = Dispatcher(storage=storage)
 
 # =========================================
-# 6. Определение Reply Keyboard для главного меню и клавиатуры отмены
+# 6. Reply Keyboard для главного меню и дополнительные клавиатуры
 # =========================================
 
 # Кнопки главного меню:
@@ -83,7 +83,7 @@ main_menu_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура для выбора уровня активности:
+# Клавиатура выбора уровня активности:
 activity_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Сидячий (1.2)")],
@@ -95,12 +95,31 @@ activity_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура для отмены:
+# Клавиатура отмены:
 btn_cancel = KeyboardButton(text="🔙 Отмена")
 cancel_kb = ReplyKeyboardMarkup(keyboard=[[btn_cancel]], resize_keyboard=True)
 
+# Клавиатура для действий с последней записью (редактировать/удалить):
+edit_last_entry_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✏️ Изменить последнюю запись")],
+        [KeyboardButton(text="🗑 Удалить последнюю запись")],
+        [KeyboardButton(text="🔙 В главное меню")]
+    ],
+    resize_keyboard=True
+)
+
+# Клавиатура для раздела "Мой прогресс":
+progress_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📈 Добавить показатели"), KeyboardButton(text="📅 Посмотреть прогресс")],
+        [KeyboardButton(text="🔙 Назад в меню")]
+    ],
+    resize_keyboard=True
+)
+
 # =========================================
-# 7. Определение FSM состояний
+# 7. FSM состояния
 # =========================================
 class Onboarding(StatesGroup):
     waiting_for_gender = State()
@@ -109,7 +128,7 @@ class Onboarding(StatesGroup):
     waiting_for_age = State()
     waiting_for_health = State()
     waiting_for_goal = State()
-    waiting_for_activity = State()  # новый шаг для выбора активности
+    waiting_for_activity = State()
 
 class ChangeGoal(StatesGroup):
     waiting_for_new_goal = State()
@@ -122,14 +141,9 @@ class Progress(StatesGroup):
     waiting_for_weight = State()
     waiting_for_measurements = State()
 
-# Клавиатура для раздела "Мой прогресс":
-progress_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="📈 Добавить показатели"), KeyboardButton(text="📅 Посмотреть прогресс")],
-        [KeyboardButton(text="🔙 Назад в меню")]
-    ],
-    resize_keyboard=True
-)
+class EditDiaryEntry(StatesGroup):
+    waiting_for_meal = State()
+    waiting_for_quantity = State()
 
 # =========================================
 # 8. Вспомогательные функции
@@ -163,6 +177,7 @@ async def send_split_message(chat_id, text, parse_mode=None):
     for part in parts:
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
 
+# (Остальные вспомогательные функции для фильтрации и работы с GPT оставляем без изменений)
 GREETINGS = [
     "привет", "здравствуйте", "добрый день", "доброе утро", "хай", "приветствую",
     "здарова", "салют", "хелло", "хелоу", "хей", "хэй", "йоу",
@@ -174,17 +189,16 @@ def is_greeting_fuzzy(text: str) -> bool:
     matches = difflib.get_close_matches(text_lower, GREETINGS, n=1, cutoff=0.8)
     return len(matches) > 0
 
+# Для краткости остальные функции (is_topic_by_regex, is_health_restriction_question, is_in_whitelist, is_in_blacklist, is_fitness_question_combined, is_topic_by_gpt, update_history, ask_gpt)
+# остаются без изменений (см. предыдущие реализации).
+
 def is_topic_by_regex(text: str) -> bool:
-    patterns_fitness = [
+    patterns = [
         r"\bфитнес\w*", r"\bтрениров\w*", r"\bтренир\w*", r"\bупражн\w*",
         r"\bфизкульт\w*", r"\bспорт\w*", r"\bсил\w*", r"\bпресс\w*",
-        r"\bягодиц\w*", r"\bрастяжк\w*", r"\bвыносливост\w*"
-    ]
-    patterns_healthy_food = [
+        r"\bягодиц\w*", r"\bрастяжк\w*", r"\bвыносливост\w*",
         r"\bдиет\w*", r"\bпитан\w*", r"\bкалор\w*", r"\bбелк\w*",
-        r"\bовощ\w*", r"\bфрукт\w*", r"\bменю\w*", r"\bрецепт\w*"
-    ]
-    patterns_unhealthy_food = [
+        r"\bовощ\w*", r"\bфрукт\w*", r"\bменю\w*", r"\bрецепт\w*",
         r"\bчипс\w*", r"\bснэк\w*", r"\bфастфуд\w*", r"\bбургер\w*", r"\bгамбургер\w*",
         r"\bшаурм\w*", r"\bдонер\w*", r"\bкартофел[ьья]\s?фри", r"\bфри\b",
         r"\bмайонез\w*", r"\bкетчуп\w*", r"\bсоус\w*", r"\bнаггетс\w*",
@@ -192,11 +206,10 @@ def is_topic_by_regex(text: str) -> bool:
         r"\bсэндвич\w*", r"\bбутерброд\w*", r"\bджанкфуд\w*", r"\bjunk food\b",
         r"\bгазиров\w*", r"\bкол\w*", r"\bпепси\w*", r"\bспрайт\w*",
         r"\bэнергетик\w*", r"\bалкогол\w*", r"\bпиво\w*", r"\bвино\w*", r"\bспиртн\w*",
-        r"\bсухар\w*",
-        r"\bшоколад\w*", r"\bконфет\w*", r"\bторт\w*", r"\bпирож\w*", r"\bвыпеч\w*",
+        r"\bсухар\w*", r"\bшоколад\w*", r"\bконфет\w*", r"\bторт\w*", r"\bпирож\w*", r"\bвыпеч\w*",
         r"\bмакарон\w*", r"\bпаста\w*", r"\bбулк\w*", r"\bхлеб\w*", r"\bбатон\w*"
     ]
-    return any(re.search(pattern, text.lower()) for pattern in patterns_fitness + patterns_healthy_food + patterns_unhealthy_food)
+    return any(re.search(pattern, text.lower()) for pattern in patterns)
 
 def is_health_restriction_question(text: str) -> bool:
     patterns = [
@@ -315,7 +328,7 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     return response.choices[0].message.content
 
 # =========================================
-# 9. Хендлеры для приветствий и стартовая команда
+# 9. Хендлеры приветствий и стартовая команда
 # =========================================
 @dp.message(lambda msg: is_greeting_fuzzy(msg.text))
 async def greet(message: types.Message):
@@ -349,7 +362,6 @@ async def start(message: types.Message, state: FSMContext):
 # =========================================
 # 10. Хендлеры для основных кнопок меню
 # =========================================
-
 @dp.message(lambda msg: msg.text == "📝 Изменить данные")
 async def handle_change_data(message: types.Message, state: FSMContext):
     await message.answer(
@@ -443,21 +455,16 @@ async def process_progress_action(message: types.Message, state: FSMContext):
         await state.set_state(Progress.waiting_for_weight)
     elif message.text == "📅 Посмотреть прогресс":
         user_id = str(message.from_user.id)
-        doc = db.collection("users").document(user_id).get()
-        data = doc.to_dict()
-        progress = data.get("progress", []) if data else []
-        if not progress:
+        docs = db.collection("users").document(user_id).collection("progress").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(5).stream()
+        entries = []
+        for doc in docs:
+            data = doc.to_dict()
+            entries.append(f"🗓 {data['timestamp'].strftime('%d.%m.%Y %H:%M')}\n⚖️ Вес: {data['weight']} кг\n📏 Обхваты: {data.get('measurements', 'не указаны')}")
+        if entries:
+            recent_entries = "\n\n".join(entries)
+            await message.answer(f"📅 **Последние показатели:**\n\n{recent_entries}", parse_mode=ParseMode.MARKDOWN, reply_markup=progress_kb)
+        else:
             await message.answer("Пока нет записей. Добавь первые показатели через «📈 Добавить показатели».", reply_markup=progress_kb)
-            return
-        recent_entries = "\n\n".join([
-            f"🗓 {entry['date']}\n⚖️ Вес: {entry['weight']} кг\n📏 Обхваты: {entry.get('measurements', 'не указаны')}"
-            for entry in progress[-5:]
-        ])
-        await message.answer(
-            f"📅 **Последние показатели:**\n\n{recent_entries}",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=progress_kb
-        )
     elif message.text == "🔙 Назад в меню":
         await message.answer("Возвращаемся в главное меню:", reply_markup=main_menu_kb)
         await state.clear()
@@ -482,43 +489,37 @@ async def process_progress_measurements(message: types.Message, state: FSMContex
         await state.clear()
         return
     measurements = message.text.strip()
-    user_data = await state.get_data()
-    weight = user_data["weight"]
-    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+    data = await state.get_data()
+    weight = data["weight"]
+    timestamp = datetime.now()
     entry = {
-        "date": timestamp,
+        "timestamp": timestamp,
         "weight": weight,
         "measurements": measurements if measurements.lower() != "пропустить" else "не указаны"
     }
     user_id = str(message.from_user.id)
-    user_ref = db.collection("users").document(user_id)
-    doc = user_ref.get()
-    data = doc.to_dict() if doc.exists else {}
-    progress = data.get("progress", [])
-    progress.append(entry)
-    user_ref.update({"progress": progress})
+    db.collection("users").document(user_id).collection("progress").add(entry)
     await message.answer(
         f"✅ Записал твои показатели:\n\n"
-        f"🗓 {timestamp}\n⚖️ Вес: {weight} кг\n📏 Обхваты: {entry['measurements']}",
+        f"🗓 {timestamp.strftime('%d.%m.%Y %H:%M')}\n⚖️ Вес: {weight} кг\n📏 Обхваты: {entry['measurements']}",
         reply_markup=progress_kb
     )
     await state.set_state(Progress.choosing_action)
 
 # =========================================
-# 12. Хендлеры для раздела "Дневник питания"
+# 12. Хендлеры для раздела "Дневник питания" с возможностью отмены и редактирования
 # =========================================
 
 @dp.message(lambda msg: msg.text == "📒 Дневник питания")
 async def handle_food_diary(message: types.Message, state: FSMContext):
     user_id = str(message.from_user.id)
-    doc = db.collection("users").document(user_id).get()
-    user_data = doc.to_dict() if doc.exists else {}
-    diary = user_data.get("food_diary", []) if user_data else []
-    if diary:
-        recent_entries = "\n\n".join([
-            f"🗓 {entry['date']}:\n🍽 {entry['food']}" for entry in diary[-5:]
-        ])
-        diary_message = f"📒 **Последние записи в дневнике питания:**\n\n{recent_entries}"
+    docs = db.collection("users").document(user_id).collection("diary").order_by("timestamp", direction=firestore.Query.ASCENDING).stream()
+    entries = []
+    for doc in docs:
+        data = doc.to_dict()
+        entries.append(f"🗓 {data['timestamp'].strftime('%d.%m.%Y %H:%M')}\n🍽 {data['meal']}, {data.get('quantity', '')}")
+    if entries:
+        diary_message = "📒 **Последние записи в дневнике питания:**\n\n" + "\n\n".join(entries[-5:])
     else:
         diary_message = "📒 Дневник питания пока пуст. Сделай первую запись!"
     await message.answer(
@@ -536,28 +537,89 @@ async def save_food_entry(message: types.Message, state: FSMContext):
         await state.clear()
         return
     user_id = str(message.from_user.id)
-    entry_text = message.text.strip()
-    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
-    user_ref = db.collection("users").document(user_id)
-    doc = user_ref.get()
-    user_data = doc.to_dict() if doc.exists else {}
-    diary = user_data.get("food_diary", [])
-    diary.append({
-        "date": timestamp,
-        "food": entry_text
-    })
-    user_ref.update({"food_diary": diary})
+    meal = message.text.strip()
+    timestamp = datetime.now()
+    entry = {
+        "timestamp": timestamp,
+        "meal": meal,
+        "quantity": ""
+    }
+    db.collection("users").document(user_id).collection("diary").add(entry)
     await message.answer(
-        f"✅ Записал в дневник:\n\n🗓 *{timestamp}*\n🍽 *{entry_text}*",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=main_menu_kb
+        f"✅ Запись добавлена:\n• {meal}",
+        reply_markup=edit_last_entry_kb,
+        parse_mode=ParseMode.MARKDOWN
     )
     await state.clear()
 
-# =========================================
-# 13. Остальные хендлеры для других разделов
-# =========================================
+# Хендлер возврата в главное меню
+@dp.message(lambda msg: msg.text == "🔙 В главное меню")
+async def go_back_main(message: types.Message):
+    await message.answer("Главное меню:", reply_markup=main_menu_kb)
 
+# Удаление последней записи из дневника питания
+@dp.message(lambda msg: msg.text == "🗑 Удалить последнюю запись")
+async def delete_last_entry(message: types.Message):
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    deleted = False
+    for doc in docs:
+        doc.reference.delete()
+        deleted = True
+        break
+    if deleted:
+        await message.answer("🗑 Последняя запись удалена!", reply_markup=main_menu_kb)
+    else:
+        await message.answer("❌ Нет записей для удаления.", reply_markup=main_menu_kb)
+
+# Редактирование последней записи из дневника питания – запуск FSM
+@dp.message(lambda msg: msg.text == "✏️ Изменить последнюю запись")
+async def edit_last_entry(message: types.Message, state: FSMContext):
+    await message.answer("Введи исправленное название блюда:", reply_markup=cancel_kb)
+    await state.set_state(EditDiaryEntry.waiting_for_meal)
+
+@dp.message(EditDiaryEntry.waiting_for_meal)
+async def edit_meal(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Редактирование отменено.", reply_markup=main_menu_kb)
+        await state.clear()
+        return
+    meal = message.text.strip()
+    await state.update_data(meal=meal)
+    await message.answer("Теперь введи исправленное количество (например, 200 г или 1 порция):", reply_markup=cancel_kb)
+    await state.set_state(EditDiaryEntry.waiting_for_quantity)
+
+@dp.message(EditDiaryEntry.waiting_for_quantity)
+async def edit_quantity(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Редактирование отменено.", reply_markup=main_menu_kb)
+        await state.clear()
+        return
+    quantity = message.text.strip()
+    data = await state.get_data()
+    meal = data.get("meal")
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+    updated = False
+    for doc in docs:
+        doc.reference.update({
+            "meal": meal,
+            "quantity": quantity,
+            "timestamp": datetime.now()
+        })
+        updated = True
+        break
+    if updated:
+        await message.answer(f"✅ Запись успешно изменена на:\n• {meal}, {quantity}", reply_markup=main_menu_kb)
+    else:
+        await message.answer("❌ Ошибка: нет записи для редактирования.", reply_markup=main_menu_kb)
+    await state.clear()
+
+# =========================================
+# 13. Остальные хендлеры для раздела "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
+# =========================================
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
 async def handle_training_plans(message: types.Message):
     await message.answer("Скоро здесь будут твои персональные планы тренировок! 🏋️‍♂️📆")
@@ -593,7 +655,6 @@ async def handle_subscription(message: types.Message):
 # =========================================
 # 14. Сбор параметров (онбординг)
 # =========================================
-
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
     gender = message.text.strip()
