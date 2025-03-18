@@ -72,20 +72,36 @@ dp = Dispatcher(storage=storage)
 # =========================================
 # 6. Определение Reply Keyboard для главного меню
 # =========================================
-btn_change_data = KeyboardButton(text="Изменить данные")
-btn_change_goal = KeyboardButton(text="Изменить цель")
-btn_calculate_kbju = KeyboardButton(text="Посчитать КБЖУ")
-btn_plans = KeyboardButton(text="Планы тренировок")
-btn_support = KeyboardButton(text="Тех. Поддержка")
-btn_subscription = KeyboardButton(text="Подписка")
+
+# Группа "Прогресс и питание"
+btn_my_progress = KeyboardButton("📊 Мой прогресс")
+btn_diary = KeyboardButton("📒 Дневник питания")
+
+# Группа "Расчёты и тренировки"
+btn_calculate_kbju = KeyboardButton("🍽 Посчитать КБЖУ")
+btn_plans = KeyboardButton("🏋️ Планы тренировок")
+
+# Группа "Персональные настройки"
+btn_change_data = KeyboardButton("📝 Изменить данные")
+btn_change_goal = KeyboardButton("🎯 Изменить цель")
+
+# Группа "Информация и уведомления"
+btn_notifications = KeyboardButton("🔔 Настройки уведомлений")
+btn_faq = KeyboardButton("❓ FAQ")
+
+# Группа "Поддержка и доступ"
+btn_support = KeyboardButton("🛠 Техподдержка")
+btn_subscription = KeyboardButton("💎 Подписка")
 
 main_menu_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [btn_change_data, btn_change_goal],
+        [btn_my_progress, btn_diary],
         [btn_calculate_kbju, btn_plans],
-        [btn_support, btn_subscription]
+        [btn_change_data, btn_change_goal],
+        [btn_notifications, btn_faq],
+        [btn_support, btn_subscription],
     ],
-    resize_keyboard=True  # клавиатура будет компактной
+    resize_keyboard=True
 )
 
 # Дополнительная клавиатура для выбора уровня активности
@@ -372,7 +388,7 @@ async def start(message: types.Message, state: FSMContext):
 #########################
 
 # 20.1. Изменить данные – повторный опрос
-@dp.message(lambda msg: msg.text == "Изменить данные")
+@dp.message(lambda msg: msg.text == "📝 Изменить данные")
 async def handle_change_data(message: types.Message, state: FSMContext):
     await message.answer(
         "Хорошо! Давай заново укажем параметры.\n\n"
@@ -382,7 +398,7 @@ async def handle_change_data(message: types.Message, state: FSMContext):
     await state.set_state(Onboarding.waiting_for_gender)
 
 # 20.2. Изменить цель – запуск короткого FSM для ввода новой цели
-@dp.message(lambda msg: msg.text == "Изменить цель")
+@dp.message(lambda msg: msg.text == "🎯 Изменить цель")
 async def handle_change_goal_button(message: types.Message, state: FSMContext):
     await message.answer("Окей! Введи, пожалуйста, новую цель (например: похудение, набор массы и т.д.)")
     await state.set_state(ChangeGoal.waiting_for_new_goal)
@@ -396,7 +412,7 @@ async def process_new_goal(message: types.Message, state: FSMContext):
     await state.clear()
 
 # 20.3. Посчитать КБЖУ – расчет калорий и макронутриентов с учётом активности и цели
-@dp.message(lambda msg: msg.text == "Посчитать КБЖУ")
+@dp.message(lambda msg: msg.text == "🍽 Посчитать КБЖУ")
 async def handle_calculate_kbju(message: types.Message):
     user_id = str(message.from_user.id)
     doc = db.collection("users").document(user_id).get()
@@ -404,7 +420,7 @@ async def handle_calculate_kbju(message: types.Message):
 
     if not user_data or "params" not in user_data:
         await message.answer(
-            "Чтобы рассчитать КБЖУ, мне нужны твои параметры. Пожалуйста, сначала задай их с помощью /start или 'Изменить данные'."
+            "Чтобы рассчитать КБЖУ, мне нужны твои параметры. Пожалуйста, сначала задай их с помощью /start или '📝 Изменить данные'."
         )
         return
 
@@ -415,11 +431,11 @@ async def handle_calculate_kbju(message: types.Message):
         height = float(params.get("рост", 0))
         age = float(params.get("возраст", 0))
     except ValueError:
-        await message.answer("Некорректные данные. Пожалуйста, обнови свои параметры через 'Изменить данные'.")
+        await message.answer("Некорректные данные. Пожалуйста, обнови свои параметры через '📝 Изменить данные'.")
         return
 
     if not (weight > 0 and height > 0 and age > 0 and (gender in ["мужчина", "женщина"])):
-        await message.answer("Похоже, твои параметры неполные или некорректные. Попробуй 'Изменить данные'.")
+        await message.answer("Похоже, твои параметры неполные или некорректные. Попробуй '📝 Изменить данные'.")
         return
 
     activity_factor = float(params.get("активность", 1.375))
