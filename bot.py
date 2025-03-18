@@ -104,7 +104,7 @@ activity_kb = ReplyKeyboardMarkup(
 )
 
 # =========================================
-# 7. FSM состояния
+# 7. Определение FSM состояний
 # =========================================
 class Onboarding(StatesGroup):
     waiting_for_gender = State()
@@ -118,9 +118,23 @@ class Onboarding(StatesGroup):
 class ChangeGoal(StatesGroup):
     waiting_for_new_goal = State()
 
-# Новый FSM для дневника питания
 class FoodDiary(StatesGroup):
     waiting_for_entry = State()
+
+# Новый FSM для раздела "Мой прогресс"
+class Progress(StatesGroup):
+    choosing_action = State()
+    waiting_for_weight = State()
+    waiting_for_measurements = State()
+
+# Клавиатура для раздела "Мой прогресс"
+progress_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📈 Добавить показатели"), KeyboardButton(text="📅 Посмотреть прогресс")],
+        [KeyboardButton(text="🔙 Назад в меню")]
+    ],
+    resize_keyboard=True
+)
 
 # =========================================
 # 8. Вспомогательные функции
@@ -187,8 +201,7 @@ def is_topic_by_regex(text: str) -> bool:
         r"\bшоколад\w*", r"\bконфет\w*", r"\bторт\w*", r"\bпирож\w*", r"\bвыпеч\w*",
         r"\bмакарон\w*", r"\bпаста\w*", r"\bбулк\w*", r"\bхлеб\w*", r"\bбатон\w*"
     ]
-    all_patterns = patterns_fitness + patterns_healthy_food + patterns_unhealthy_food
-    return any(re.search(pattern, text.lower()) for pattern in all_patterns)
+    return any(re.search(pattern, text.lower()) for pattern in patterns_fitness + patterns_healthy_food + patterns_unhealthy_food)
 
 def is_health_restriction_question(text: str) -> bool:
     patterns = [
@@ -307,15 +320,12 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     return response.choices[0].message.content
 
 # =========================================
-# 18. Хендлер для приветствий (fuzzy matching)
+# 9. Хендлеры приветствий и стартовая команда
 # =========================================
 @dp.message(lambda msg: is_greeting_fuzzy(msg.text))
 async def greet_user(message: types.Message):
     await message.answer("Привет! Чем могу помочь по фитнесу, питанию и здоровому образу жизни?")
 
-# =========================================
-# 19. Стартовая команда с показом клавиатуры
-# =========================================
 @dp.message(CommandStart())
 async def start(message: types.Message, state: FSMContext):
     user_id = str(message.from_user.id)
@@ -342,10 +352,10 @@ async def start(message: types.Message, state: FSMContext):
         )
 
 # =========================================
-# 20. Логика для кнопок меню
+# 10. Хендлеры для основных кнопок меню
 # =========================================
 
-# Обработчик для кнопки "📝 Изменить данные"
+# "📝 Изменить данные"
 @dp.message(lambda msg: msg.text == "📝 Изменить данные")
 async def handle_change_data(message: types.Message, state: FSMContext):
     await message.answer(
@@ -355,7 +365,7 @@ async def handle_change_data(message: types.Message, state: FSMContext):
     )
     await state.set_state(Onboarding.waiting_for_gender)
 
-# Обработчик для кнопки "🎯 Изменить цель"
+# "🎯 Изменить цель"
 @dp.message(lambda msg: msg.text == "🎯 Изменить цель")
 async def handle_change_goal_button(message: types.Message, state: FSMContext):
     await message.answer("Окей! Введи, пожалуйста, новую цель (например: похудение, набор массы и т.д.)")
@@ -369,7 +379,7 @@ async def process_new_goal(message: types.Message, state: FSMContext):
     await message.answer(f"Цель обновлена на: *{new_goal}*", parse_mode=ParseMode.MARKDOWN)
     await state.clear()
 
-# Обработчик для кнопки "🍽 Посчитать КБЖУ"
+# "🍽 Посчитать КБЖУ"
 @dp.message(lambda msg: msg.text == "🍽 Посчитать КБЖУ")
 async def handle_calculate_kbju(message: types.Message):
     user_id = str(message.from_user.id)
@@ -425,35 +435,84 @@ async def handle_calculate_kbju(message: types.Message):
     )
     await message.answer(response_text)
 
-# Новые обработчики для дополнительных кнопок:
+# =========================================
+# 11. Новые хендлеры для раздела "Мой прогресс"
+# =========================================
 
-# 📊 Мой прогресс (полноценная реализация)
+# При нажатии на "📊 Мой прогресс" выводим меню раздела
 @dp.message(lambda msg: msg.text == "📊 Мой прогресс")
-async def handle_my_progress(message: types.Message):
-    user_id = str(message.from_user.id)
-    doc = db.collection("users").document(user_id).get()
-    user_data = doc.to_dict()
-    if not user_data or "params" not in user_data:
-        await message.answer(
-            "Пока нет твоих данных. Задай их с помощью кнопки 📝 *«Изменить данные»*.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return
-    params = user_data["params"]
-    progress_message = (
-        "📊 **Твои текущие параметры и цель:**\n\n"
-        f"• **Пол:** {params.get('пол', '—')}\n"
-        f"• **Вес:** {params.get('вес', '—')} кг\n"
-        f"• **Рост:** {params.get('рост', '—')} см\n"
-        f"• **Возраст:** {params.get('возраст', '—')} лет\n"
-        f"• **Активность:** {params.get('активность', '—')}\n"
-        f"• **Здоровье:** {params.get('здоровье', '—')}\n"
-        f"• **Цель:** {params.get('цель', '—')}\n\n"
-        "Ты можешь изменить эти данные в любой момент через меню 📝 «Изменить данные» или 🎯 «Изменить цель»."
-    )
-    await message.answer(progress_message, parse_mode=ParseMode.MARKDOWN)
+async def handle_progress_menu(message: types.Message, state: FSMContext):
+    await message.answer("Выбери, что хочешь сделать:", reply_markup=progress_kb)
+    await state.set_state(Progress.choosing_action)
 
-# 📒 Дневник питания – вывод последних записей и предложение добавить новую запись
+# Обработка выбора действия в разделе "Мой прогресс"
+@dp.message(Progress.choosing_action)
+async def process_progress_action(message: types.Message, state: FSMContext):
+    if message.text == "📈 Добавить показатели":
+        await message.answer("Напиши свой текущий вес (кг):")
+        await state.set_state(Progress.waiting_for_weight)
+    elif message.text == "📅 Посмотреть прогресс":
+        user_id = str(message.from_user.id)
+        doc = db.collection("users").document(user_id).get()
+        data = doc.to_dict()
+        progress = data.get("progress", []) if data else []
+        if not progress:
+            await message.answer("Пока нет записей. Добавь первые показатели через «📈 Добавить показатели».", reply_markup=progress_kb)
+            return
+        recent_entries = "\n\n".join([
+            f"🗓 {entry['date']}\n⚖️ Вес: {entry['weight']} кг\n📏 Обхваты: {entry.get('measurements', 'не указаны')}"
+            for entry in progress[-5:]
+        ])
+        await message.answer(
+            f"📅 **Последние показатели:**\n\n{recent_entries}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=progress_kb
+        )
+    elif message.text == "🔙 Назад в меню":
+        await message.answer("Возвращаемся в главное меню:", reply_markup=main_menu_kb)
+        await state.clear()
+    else:
+        await message.answer("Выбери один из вариантов, пожалуйста.", reply_markup=progress_kb)
+
+# Сохраняем вес и переходим к вводу обхватов (опционально)
+@dp.message(Progress.waiting_for_weight)
+async def process_progress_weight(message: types.Message, state: FSMContext):
+    weight = message.text.strip()
+    await state.update_data(weight=weight)
+    await message.answer("Теперь укажи свои обхваты (например: талия, грудь, бёдра), или напиши «пропустить»:")
+    await state.set_state(Progress.waiting_for_measurements)
+
+# Сохраняем запись прогресса
+@dp.message(Progress.waiting_for_measurements)
+async def process_progress_measurements(message: types.Message, state: FSMContext):
+    measurements = message.text.strip()
+    user_data = await state.get_data()
+    weight = user_data["weight"]
+    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+    entry = {
+        "date": timestamp,
+        "weight": weight,
+        "measurements": measurements if measurements.lower() != "пропустить" else "не указаны"
+    }
+    user_id = str(message.from_user.id)
+    user_ref = db.collection("users").document(user_id)
+    doc = user_ref.get()
+    data = doc.to_dict() if doc.exists else {}
+    progress = data.get("progress", [])
+    progress.append(entry)
+    user_ref.update({"progress": progress})
+    await message.answer(
+        f"✅ Записал твои показатели:\n\n"
+        f"🗓 {timestamp}\n⚖️ Вес: {weight} кг\n📏 Обхваты: {entry['measurements']}",
+        reply_markup=progress_kb
+    )
+    await state.set_state(Progress.choosing_action)
+
+# =========================================
+# 12. Хендлеры для раздела "Дневник питания"
+# =========================================
+
+# При нажатии на "📒 Дневник питания"
 @dp.message(lambda msg: msg.text == "📒 Дневник питания")
 async def handle_food_diary(message: types.Message, state: FSMContext):
     user_id = str(message.from_user.id)
@@ -474,7 +533,7 @@ async def handle_food_diary(message: types.Message, state: FSMContext):
     )
     await state.set_state(FoodDiary.waiting_for_entry)
 
-# Хендлер для сохранения записи в дневник питания
+# Сохранение записи в дневник питания
 @dp.message(FoodDiary.waiting_for_entry)
 async def save_food_entry(message: types.Message, state: FSMContext):
     user_id = str(message.from_user.id)
@@ -496,17 +555,21 @@ async def save_food_entry(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
-# 🏋️ Планы тренировок
+# =========================================
+# 13. Остальные хендлеры для других разделов
+# =========================================
+
+# "🏋️ Планы тренировок"
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
 async def handle_training_plans(message: types.Message):
     await message.answer("Скоро здесь будут твои персональные планы тренировок! 🏋️‍♂️📆")
 
-# 🔔 Настройки уведомлений
+# "🔔 Настройки уведомлений"
 @dp.message(lambda msg: msg.text == "🔔 Настройки уведомлений")
 async def handle_notifications(message: types.Message):
     await message.answer("Настройки уведомлений скоро будут доступны! 🔔⚙️")
 
-# ❓ FAQ
+# "❓ FAQ"
 @dp.message(lambda msg: msg.text == "❓ FAQ")
 async def handle_faq(message: types.Message):
     await message.answer(
@@ -517,12 +580,12 @@ async def handle_faq(message: types.Message):
         "Остальные вопросы скоро появятся тут!"
     )
 
-# 🛠 Техподдержка
+# "🛠 Техподдержка"
 @dp.message(lambda msg: msg.text == "🛠 Техподдержка")
 async def handle_support(message: types.Message):
     await message.answer("Если у тебя возникли проблемы или вопросы, напиши нам: @support_account")
 
-# 💎 Подписка
+# "💎 Подписка"
 @dp.message(lambda msg: msg.text == "💎 Подписка")
 async def handle_subscription(message: types.Message):
     user_id = str(message.from_user.id)
@@ -534,7 +597,7 @@ async def handle_subscription(message: types.Message):
     )
 
 # =========================================
-# 21. Сбор параметров пошагово (онбординг)
+# 14. Сбор параметров (онбординг)
 # =========================================
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
@@ -623,7 +686,7 @@ async def process_activity(message: types.Message, state: FSMContext):
     await state.clear()
 
 # =========================================
-# 22. Обновление цели через текстовую фразу (альтернативный вариант)
+# 15. Обновление цели через текстовую фразу (альтернативный вариант)
 # =========================================
 @dp.message(lambda msg: "поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower())
 async def update_goal(message: types.Message):
@@ -638,7 +701,7 @@ async def update_goal(message: types.Message):
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
 # =========================================
-# 23. Основной обработчик сообщений (общий fallback)
+# 16. Основной обработчик сообщений (общий fallback)
 # =========================================
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
 async def handle_message(message: types.Message):
@@ -669,7 +732,7 @@ async def handle_message(message: types.Message):
     await update_history(user_id, "bot", response)
 
 # =========================================
-# 24. Точка входа
+# 17. Точка входа
 # =========================================
 async def main():
     await dp.start_polling(bot)
