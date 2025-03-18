@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 import difflib  # для fuzzy matching
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart, Command
@@ -103,7 +104,26 @@ activity_kb = ReplyKeyboardMarkup(
 )
 
 # =========================================
-# 7. Функция для обработки Markdown
+# 7. FSM состояния
+# =========================================
+class Onboarding(StatesGroup):
+    waiting_for_gender = State()
+    waiting_for_weight = State()
+    waiting_for_height = State()
+    waiting_for_age = State()
+    waiting_for_health = State()
+    waiting_for_goal = State()
+    waiting_for_activity = State()  # новый шаг для выбора активности
+
+class ChangeGoal(StatesGroup):
+    waiting_for_new_goal = State()
+
+# Новый FSM для дневника питания
+class FoodDiary(StatesGroup):
+    waiting_for_entry = State()
+
+# =========================================
+# 8. Вспомогательные функции
 # =========================================
 def fix_markdown_telegram(text: str) -> str:
     lines = text.split("\n")
@@ -118,9 +138,6 @@ def fix_markdown_telegram(text: str) -> str:
         new_lines.append(line)
     return "\n".join(new_lines)
 
-# =========================================
-# 8. Функция разбивки длинного текста
-# =========================================
 def split_message(text, max_length=4096):
     parts = []
     while len(text) > max_length:
@@ -132,17 +149,11 @@ def split_message(text, max_length=4096):
     parts.append(text)
     return parts
 
-# =========================================
-# 9. Отправка сообщений по частям
-# =========================================
 async def send_split_message(chat_id, text, parse_mode=None):
     parts = split_message(text)
     for part in parts:
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
 
-# =========================================
-# 10. Fuzzy matching для приветствий
-# =========================================
 GREETINGS = [
     "привет", "здравствуйте", "добрый день", "доброе утро", "хай", "приветствую",
     "здарова", "салют", "хелло", "хелоу", "хей", "хэй", "йоу",
@@ -154,9 +165,6 @@ def is_greeting_fuzzy(text: str) -> bool:
     matches = difflib.get_close_matches(text_lower, GREETINGS, n=1, cutoff=0.8)
     return len(matches) > 0
 
-# =========================================
-# 11. Фильтрация тематики (регулярки и дополнительные проверки)
-# =========================================
 def is_topic_by_regex(text: str) -> bool:
     patterns_fitness = [
         r"\bфитнес\w*", r"\bтрениров\w*", r"\bтренир\w*", r"\bупражн\w*",
@@ -180,16 +188,14 @@ def is_topic_by_regex(text: str) -> bool:
         r"\bмакарон\w*", r"\bпаста\w*", r"\bбулк\w*", r"\bхлеб\w*", r"\bбатон\w*"
     ]
     all_patterns = patterns_fitness + patterns_healthy_food + patterns_unhealthy_food
-    text_lower = text.lower()
-    return any(re.search(pattern, text_lower) for pattern in all_patterns)
+    return any(re.search(pattern, text.lower()) for pattern in all_patterns)
 
 def is_health_restriction_question(text: str) -> bool:
     patterns = [
         r"\bне могу\b", r"\bиз-за\b", r"\bболит\b", r"\bболь\b",
         r"\bограничен\b", r"\bнет возможности\b", r"\bпроблемы со\b", r"\bс травмой\b"
     ]
-    text_lower = text.lower()
-    return any(re.search(pattern, text_lower) for pattern in patterns)
+    return any(re.search(pattern, text.lower()) for pattern in patterns)
 
 def is_in_whitelist(text: str) -> bool:
     whitelist = [
@@ -200,8 +206,7 @@ def is_in_whitelist(text: str) -> bool:
         "мотивация", "прогресс", "результат", "расписание", "план",
         "физическая активность", "тренир", "кроссфит", "силовые тренировки"
     ]
-    text_lower = text.lower()
-    return any(word in text_lower for word in whitelist)
+    return any(word in text.lower() for word in whitelist)
 
 def is_in_blacklist(text: str) -> bool:
     blacklist = [
@@ -210,12 +215,8 @@ def is_in_blacklist(text: str) -> bool:
         "кино", "игры", "секс", "шоу", "телевидение", "мем", "юмор",
         "кредит", "банки", "инфляция", "акции", "инвестиционный", "трейдинг"
     ]
-    text_lower = text.lower()
-    return any(word in text_lower for word in blacklist)
+    return any(word in text.lower() for word in blacklist)
 
-# =========================================
-# 12. Комбинированная проверка тематики
-# =========================================
 async def is_fitness_question_combined(user_id: str, text: str) -> bool:
     if is_in_blacklist(text):
         return False
@@ -228,9 +229,6 @@ async def is_fitness_question_combined(user_id: str, text: str) -> bool:
     # Проверка через GPT fallback
     return await is_topic_by_gpt(user_id, text)
 
-# =========================================
-# 13. GPT fallback для проверки тематики
-# =========================================
 async def is_topic_by_gpt(user_id: str, text: str) -> bool:
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
@@ -253,9 +251,6 @@ async def is_topic_by_gpt(user_id: str, text: str) -> bool:
     answer = response.choices[0].message.content.strip().lower()
     return "да" in answer
 
-# =========================================
-# 14. Обновление истории в Firestore
-# =========================================
 async def update_history(user_id: str, role: str, text: str):
     user_ref = db.collection("users").document(user_id)
     doc = user_ref.get()
@@ -268,9 +263,6 @@ async def update_history(user_id: str, role: str, text: str):
     history = history[-5:]
     user_ref.update({"history": history})
 
-# =========================================
-# 15. Формирование ответа GPT (с контекстом)
-# =========================================
 async def ask_gpt(user_id: str, user_message: str) -> str:
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
@@ -315,24 +307,6 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     return response.choices[0].message.content
 
 # =========================================
-# 16. FSM для сбора параметров (онбординг)
-# =========================================
-class Onboarding(StatesGroup):
-    waiting_for_gender = State()
-    waiting_for_weight = State()
-    waiting_for_height = State()
-    waiting_for_age = State()
-    waiting_for_health = State()
-    waiting_for_goal = State()
-    waiting_for_activity = State()  # новый шаг для выбора активности
-
-# =========================================
-# 17. FSM для изменения цели (короткий опрос)
-# =========================================
-class ChangeGoal(StatesGroup):
-    waiting_for_new_goal = State()
-
-# =========================================
 # 18. Хендлер для приветствий (fuzzy matching)
 # =========================================
 @dp.message(lambda msg: is_greeting_fuzzy(msg.text))
@@ -361,16 +335,15 @@ async def start(message: types.Message, state: FSMContext):
         )
         await state.set_state(Onboarding.waiting_for_gender)
     else:
-        # Если данные уже есть, отправляем клавиатуру с главным меню
         await message.answer(
             "Параметры уже заданы. Можешь выбрать действие в меню:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_kb
         )
 
-#########################
+# =========================================
 # 20. Логика для кнопок меню
-#########################
+# =========================================
 
 # Обработчик для кнопки "📝 Изменить данные"
 @dp.message(lambda msg: msg.text == "📝 Изменить данные")
@@ -402,13 +375,11 @@ async def handle_calculate_kbju(message: types.Message):
     user_id = str(message.from_user.id)
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
-
     if not user_data or "params" not in user_data:
         await message.answer(
             "Чтобы рассчитать КБЖУ, мне нужны твои параметры. Пожалуйста, сначала задай их с помощью /start или '📝 Изменить данные'."
         )
         return
-
     params = user_data["params"]
     gender = params.get("пол", "").lower()
     try:
@@ -418,42 +389,32 @@ async def handle_calculate_kbju(message: types.Message):
     except ValueError:
         await message.answer("Некорректные данные. Пожалуйста, обнови свои параметры через '📝 Изменить данные'.")
         return
-
     if not (weight > 0 and height > 0 and age > 0 and (gender in ["мужчина", "женщина"])):
         await message.answer("Похоже, твои параметры неполные или некорректные. Попробуй '📝 Изменить данные'.")
         return
-
     activity_factor = float(params.get("активность", 1.375))
-    # Расчет BMR по формуле Миффлина – Сан Жеора
     if gender == "мужчина":
         bmr = 9.99 * weight + 6.25 * height - 4.92 * age + 5
     else:
         bmr = 9.99 * weight + 6.25 * height - 4.92 * age - 161
-
     tdee = bmr * activity_factor
-
-    # Корректировка TDEE в зависимости от цели
     goal_lower = params.get("цель", "").lower()
     if "похуд" in goal_lower:
-        factor_goal = 0.85  # вычесть примерно 15%
+        factor_goal = 0.85
         protein_factor = 1.8
     elif "набор" in goal_lower:
-        factor_goal = 1.15  # прибавить примерно 15%
+        factor_goal = 1.15
         protein_factor = 1.5
     else:
         factor_goal = 1.0
         protein_factor = 1.5
-
     tdee_adjusted = tdee * factor_goal
-
-    # Расчет макронутриентов:
     protein_g = protein_factor * weight
     fat_g = 1.0 * weight
     cals_from_protein = protein_g * 4
     cals_from_fat = fat_g * 9
     carbs_cals = tdee_adjusted - (cals_from_protein + cals_from_fat)
     carbs_g = carbs_cals / 4 if carbs_cals > 0 else 0
-
     response_text = (
         f"Твои расчётные показатели (приблизительно):\n\n"
         f"Суточная потребность в калориях: ~{int(tdee_adjusted)} ккал\n\n"
@@ -472,16 +433,13 @@ async def handle_my_progress(message: types.Message):
     user_id = str(message.from_user.id)
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict()
-
     if not user_data or "params" not in user_data:
         await message.answer(
             "Пока нет твоих данных. Задай их с помощью кнопки 📝 *«Изменить данные»*.",
             parse_mode=ParseMode.MARKDOWN
         )
         return
-
     params = user_data["params"]
-
     progress_message = (
         "📊 **Твои текущие параметры и цель:**\n\n"
         f"• **Пол:** {params.get('пол', '—')}\n"
@@ -493,13 +451,50 @@ async def handle_my_progress(message: types.Message):
         f"• **Цель:** {params.get('цель', '—')}\n\n"
         "Ты можешь изменить эти данные в любой момент через меню 📝 «Изменить данные» или 🎯 «Изменить цель»."
     )
-
     await message.answer(progress_message, parse_mode=ParseMode.MARKDOWN)
 
-# 📒 Дневник питания
+# 📒 Дневник питания – вывод последних записей и предложение добавить новую запись
 @dp.message(lambda msg: msg.text == "📒 Дневник питания")
-async def handle_food_diary(message: types.Message):
-    await message.answer("Здесь скоро появится твой дневник питания! 📒🍏")
+async def handle_food_diary(message: types.Message, state: FSMContext):
+    user_id = str(message.from_user.id)
+    doc = db.collection("users").document(user_id).get()
+    user_data = doc.to_dict() if doc.exists else {}
+    diary = user_data.get("food_diary", []) if user_data else []
+    if diary:
+        recent_entries = "\n\n".join([
+            f"🗓 {entry['date']}:\n🍽 {entry['food']}" for entry in diary[-5:]
+        ])
+        diary_message = f"📒 **Последние записи в дневнике питания:**\n\n{recent_entries}"
+    else:
+        diary_message = "📒 Дневник питания пока пуст. Сделай первую запись!"
+    await message.answer(
+        f"{diary_message}\n\n"
+        "Напиши, что ты съел сейчас (например: «Обед: гречка, куриная грудка, овощной салат»):",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    await state.set_state(FoodDiary.waiting_for_entry)
+
+# Хендлер для сохранения записи в дневник питания
+@dp.message(FoodDiary.waiting_for_entry)
+async def save_food_entry(message: types.Message, state: FSMContext):
+    user_id = str(message.from_user.id)
+    entry_text = message.text.strip()
+    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+    user_ref = db.collection("users").document(user_id)
+    doc = user_ref.get()
+    user_data = doc.to_dict() if doc.exists else {}
+    diary = user_data.get("food_diary", [])
+    diary.append({
+        "date": timestamp,
+        "food": entry_text
+    })
+    user_ref.update({"food_diary": diary})
+    await message.answer(
+        f"✅ Записал в дневник:\n\n🗓 *{timestamp}*\n🍽 *{entry_text}*",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_kb
+    )
+    await state.clear()
 
 # 🏋️ Планы тренировок
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
@@ -525,9 +520,7 @@ async def handle_faq(message: types.Message):
 # 🛠 Техподдержка
 @dp.message(lambda msg: msg.text == "🛠 Техподдержка")
 async def handle_support(message: types.Message):
-    await message.answer(
-        "Если у тебя возникли проблемы или вопросы, напиши нам: @support_account"
-    )
+    await message.answer("Если у тебя возникли проблемы или вопросы, напиши нам: @support_account")
 
 # 💎 Подписка
 @dp.message(lambda msg: msg.text == "💎 Подписка")
@@ -582,7 +575,6 @@ async def process_health(message: types.Message, state: FSMContext):
     await message.answer("И наконец, какая у тебя **цель**? (например: похудение, набор массы и т.д.)", parse_mode=ParseMode.MARKDOWN)
     await state.set_state(Onboarding.waiting_for_goal)
 
-# После ввода цели просим выбрать уровень активности
 @dp.message(Onboarding.waiting_for_goal)
 async def process_goal(message: types.Message, state: FSMContext):
     goal = message.text.strip()
@@ -594,7 +586,6 @@ async def process_goal(message: types.Message, state: FSMContext):
     )
     await state.set_state(Onboarding.waiting_for_activity)
 
-# Обработка выбора активности
 @dp.message(Onboarding.waiting_for_activity)
 async def process_activity(message: types.Message, state: FSMContext):
     activity_text = message.text.strip()
