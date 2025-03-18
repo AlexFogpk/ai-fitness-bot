@@ -99,7 +99,7 @@ activity_kb = ReplyKeyboardMarkup(
 btn_cancel = KeyboardButton(text="🔙 Отмена")
 cancel_kb = ReplyKeyboardMarkup(keyboard=[[btn_cancel]], resize_keyboard=True)
 
-# Клавиатура действий для Дневника питания:
+# Клавиатура действий для раздела "Дневник питания":
 diary_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Добавить запись (питание)")],
@@ -111,13 +111,14 @@ diary_actions_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура действий для Раздела "Мой прогресс":
+# Клавиатура действий для раздела "Мой прогресс":
 progress_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Добавить запись (прогресс)")],
         [KeyboardButton(text="✏️ Изменить последнюю запись (прогресс)")],
         [KeyboardButton(text="🗑 Удалить последнюю запись (прогресс)")],
         [KeyboardButton(text="📌 Последние показатели (прогресс)")],
+        [KeyboardButton(text="📌 Мои параметры")],
         [KeyboardButton(text="🔙 В главное меню")]
     ],
     resize_keyboard=True
@@ -370,7 +371,7 @@ async def start(message: types.Message, state: FSMContext):
         )
 
 # =========================================
-# 10. Хендлеры основных кнопок меню
+# 10. Основные хендлеры меню
 # =========================================
 
 @dp.message(lambda msg: msg.text == "📝 Изменить данные")
@@ -625,6 +626,8 @@ async def process_progress_measurements(message: types.Message, state: FSMContex
     }
     user_id = str(message.from_user.id)
     db.collection("users").document(user_id).collection("progress").add(entry)
+    # Обновляем вес в основных параметрах пользователя
+    db.collection("users").document(user_id).update({"params.weight": weight})
     await message.answer(
         f"✅ Записал твои показатели:\n🗓 {timestamp.strftime('%d.%m.%Y %H:%M')}\n⚖️ Вес: {weight} кг\n📏 Обхваты: {entry['measurements']}",
         reply_markup=progress_actions_kb
@@ -679,6 +682,8 @@ async def update_progress_measurements(message: types.Message, state: FSMContext
         updated = True
         break
     if updated:
+        # Также обновляем основной вес пользователя:
+        db.collection("users").document(user_id).update({"params.weight": new_weight})
         await message.answer(f"✅ Запись изменена на:\n⚖️ Вес: {new_weight} кг\n📏 Обхваты: {new_measurements}", reply_markup=progress_actions_kb)
     else:
         await message.answer("❌ Нет записи для изменения.", reply_markup=progress_actions_kb)
@@ -710,11 +715,12 @@ async def last_progress_entry(message: types.Message):
         break
     if last_entry:
         timestamp = last_entry.get("timestamp")
-        date_str = timestamp.strftime("%d.%m.%Y") if isinstance(timestamp, datetime) else "N/A"
+        date_str = timestamp.strftime("%d.%m.%Y %H:%M") if isinstance(timestamp, datetime) else "N/A"
+        measurements = last_entry.get("measurements", "не указаны")
         await message.answer(
             f"📌 Твои последние показатели:\n"
-            f"• Вес: {last_entry.get('weight', 'N/A')} кг\n"
-            f"• Рост: {last_entry.get('height', 'N/A')} см\n"
+            f"• Вес: {last_entry.get('weight', 'не указан')} кг\n"
+            f"• Обхваты: {measurements}\n"
             f"• Дата: {date_str}",
             reply_markup=progress_actions_kb
         )
@@ -722,7 +728,7 @@ async def last_progress_entry(message: types.Message):
         await message.answer("❌ У тебя пока нет записей.", reply_markup=progress_actions_kb)
 
 # =========================================
-# 13. Хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
+# 13. Хендлеры для других разделов
 # =========================================
 
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
