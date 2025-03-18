@@ -18,9 +18,6 @@ from firebase_admin import credentials, firestore
 # Для работы с OpenAI (gpt-4o-mini)
 from openai import AsyncOpenAI
 
-# Для работы с NLP (Hugging Face Transformers)
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-
 # =========================================
 # 1. Константы окружения
 # =========================================
@@ -47,19 +44,8 @@ db = firestore.client()
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # =========================================
-# 4. Инициализация NLP-модели (русская модель для сентимент-анализа)
+# 4. Удалено: Инициализация NLP-модели (rubert-tiny2) и функция nlp_is_fitness_topic
 # =========================================
-model_name = "cointegrated/rubert-tiny2"
-huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
-
-tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=huggingface_token)
-model = AutoModelForSequenceClassification.from_pretrained(model_name, use_auth_token=huggingface_token)
-classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
-
-def nlp_is_fitness_topic(text: str) -> bool:
-    result = classifier(text)
-    label = result[0]["label"].lower()
-    return label == "positive"
 
 # =========================================
 # 5. Инициализация бота и Dispatcher
@@ -239,8 +225,7 @@ async def is_fitness_question_combined(user_id: str, text: str) -> bool:
         return True
     if is_topic_by_regex(text):
         return True
-    if nlp_is_fitness_topic(text):
-        return True
+    # Удалена проверка с помощью NLP-модели
     return await is_topic_by_gpt(user_id, text)
 
 # =========================================
