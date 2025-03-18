@@ -60,24 +60,24 @@ dp = Dispatcher(storage=storage)
 # =========================================
 
 # Группа "Прогресс и питание"
-btn_my_progress = KeyboardButton("📊 Мой прогресс")
-btn_diary = KeyboardButton("📒 Дневник питания")
+btn_my_progress = KeyboardButton(text="📊 Мой прогресс")
+btn_diary = KeyboardButton(text="📒 Дневник питания")
 
 # Группа "Расчёты и тренировки"
-btn_calculate_kbju = KeyboardButton("🍽 Посчитать КБЖУ")
-btn_plans = KeyboardButton("🏋️ Планы тренировок")
+btn_calculate_kbju = KeyboardButton(text="🍽 Посчитать КБЖУ")
+btn_plans = KeyboardButton(text="🏋️ Планы тренировок")
 
 # Группа "Персональные настройки"
-btn_change_data = KeyboardButton("📝 Изменить данные")
-btn_change_goal = KeyboardButton("🎯 Изменить цель")
+btn_change_data = KeyboardButton(text="📝 Изменить данные")
+btn_change_goal = KeyboardButton(text="🎯 Изменить цель")
 
 # Группа "Информация и уведомления"
-btn_notifications = KeyboardButton("🔔 Настройки уведомлений")
-btn_faq = KeyboardButton("❓ FAQ")
+btn_notifications = KeyboardButton(text="🔔 Настройки уведомлений")
+btn_faq = KeyboardButton(text="❓ FAQ")
 
 # Группа "Поддержка и доступ"
-btn_support = KeyboardButton("🛠 Техподдержка")
-btn_subscription = KeyboardButton("💎 Подписка")
+btn_support = KeyboardButton(text="🛠 Техподдержка")
+btn_subscription = KeyboardButton(text="💎 Подписка")
 
 main_menu_kb = ReplyKeyboardMarkup(
     keyboard=[
