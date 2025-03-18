@@ -99,7 +99,7 @@ activity_kb = ReplyKeyboardMarkup(
 btn_cancel = KeyboardButton(text="🔙 Отмена")
 cancel_kb = ReplyKeyboardMarkup(keyboard=[[btn_cancel]], resize_keyboard=True)
 
-# Клавиатура действий для раздела "Дневник питания":
+# Клавиатура для раздела "Дневник питания":
 diary_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Добавить запись (питание)")],
@@ -111,7 +111,7 @@ diary_actions_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Клавиатура действий для раздела "Мой прогресс":
+# Клавиатура для раздела "Мой прогресс":
 progress_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Добавить запись (прогресс)")],
@@ -191,7 +191,7 @@ async def send_split_message(chat_id, text, parse_mode=None):
     for part in parts:
         await bot.send_message(chat_id, part, parse_mode=parse_mode)
 
-# Функции для фильтрации и GPT (оставляем без изменений)
+# Функции для фильтрации и GPT оставляем без изменений
 GREETINGS = [
     "привет", "здравствуйте", "добрый день", "доброе утро", "хай", "приветствую",
     "здарова", "салют", "хелло", "хелоу", "хей", "хэй", "йоу",
@@ -337,6 +337,21 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
     )
     return response.choices[0].message.content
 
+# Обновляем массив последних 7 записей прогресса в основном документе
+async def update_progress_history(user_id: str):
+    progress_ref = db.collection("users").document(user_id).collection("progress")
+    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(7).stream()
+    history = []
+    for doc in docs:
+        data = doc.to_dict()
+        if isinstance(data.get("timestamp"), datetime):
+            data["timestamp_str"] = data["timestamp"].strftime("%d.%m.%Y %H:%M")
+        else:
+            data["timestamp_str"] = "N/A"
+        history.append(data)
+    # Обновляем основной документ
+    db.collection("users").document(user_id).update({"progress_history": history})
+
 # =========================================
 # 9. Хендлеры приветствий и стартовая команда
 # =========================================
@@ -451,148 +466,68 @@ async def handle_calculate_kbju(message: types.Message):
     )
     await message.answer(response_text)
 
-# Хендлер для возврата в главное меню (используется в обоих разделах)
-@dp.message(lambda msg: msg.text == "🔙 В главное меню")
-async def back_to_main_menu(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🔸 Главное меню", reply_markup=main_menu_kb)
-
 # =========================================
-# 11. Хендлеры для раздела "Дневник питания"
-# =========================================
-
-@dp.message(lambda msg: msg.text == "📒 Дневник питания")
-async def open_diary_menu(message: types.Message):
-    await message.answer("📒 Что хочешь сделать в дневнике питания?", reply_markup=diary_actions_kb)
-
-@dp.message(lambda msg: msg.text == "✅ Добавить запись (питание)")
-async def add_diary_entry(message: types.Message, state: FSMContext):
-    await message.answer("Введи название блюда:", reply_markup=cancel_kb)
-    await state.set_state(DiaryEntry.waiting_for_meal)
-
-@dp.message(DiaryEntry.waiting_for_meal)
-async def process_diary_meal(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Отмена":
-        await message.answer("Запись отменена.", reply_markup=diary_actions_kb)
-        await state.clear()
-        return
-    await state.update_data(meal=message.text.strip())
-    await message.answer("Теперь введи количество:", reply_markup=cancel_kb)
-    await state.set_state(DiaryEntry.waiting_for_quantity)
-
-@dp.message(DiaryEntry.waiting_for_quantity)
-async def process_diary_quantity(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Отмена":
-        await message.answer("Запись отменена.", reply_markup=diary_actions_kb)
-        await state.clear()
-        return
-    quantity = message.text.strip()
-    data = await state.get_data()
-    meal = data.get("meal")
-    user_id = str(message.from_user.id)
-    diary_ref = db.collection("users").document(user_id).collection("diary")
-    diary_ref.add({
-        "meal": meal,
-        "quantity": quantity,
-        "timestamp": datetime.now()
-    })
-    await message.answer(f"✅ Добавлена запись:\n• {meal}, {quantity}", reply_markup=diary_actions_kb)
-    await state.clear()
-
-@dp.message(lambda msg: msg.text == "✏️ Изменить последнюю запись (питание)")
-async def edit_last_diary_entry(message: types.Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    diary_ref = db.collection("users").document(user_id).collection("diary")
-    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
-    last_entry = None
-    for doc in docs:
-        last_entry = doc
-        break
-    if last_entry:
-        await state.update_data(last_doc_id=last_entry.id)
-        await message.answer("Введи новое название блюда:", reply_markup=cancel_kb)
-        await state.set_state(DiaryEdit.waiting_for_new_meal)
-    else:
-        await message.answer("❌ Нет записей для изменения.", reply_markup=diary_actions_kb)
-
-@dp.message(DiaryEdit.waiting_for_new_meal)
-async def update_diary_meal(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Отмена":
-        await message.answer("Редактирование отменено.", reply_markup=diary_actions_kb)
-        await state.clear()
-        return
-    await state.update_data(new_meal=message.text.strip())
-    await message.answer("Теперь введи новое количество:", reply_markup=cancel_kb)
-    await state.set_state(DiaryEdit.waiting_for_new_quantity)
-
-@dp.message(DiaryEdit.waiting_for_new_quantity)
-async def update_diary_quantity(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Отмена":
-        await message.answer("Редактирование отменено.", reply_markup=diary_actions_kb)
-        await state.clear()
-        return
-    new_quantity = message.text.strip()
-    data = await state.get_data()
-    last_doc_id = data.get("last_doc_id")
-    new_meal = data.get("new_meal")
-    user_id = str(message.from_user.id)
-    diary_ref = db.collection("users").document(user_id).collection("diary")
-    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
-    updated = False
-    for doc in docs:
-        doc.reference.update({
-            "meal": new_meal,
-            "quantity": new_quantity,
-            "timestamp": datetime.now()
-        })
-        updated = True
-        break
-    if updated:
-        await message.answer(f"✅ Запись изменена на:\n• {new_meal}, {new_quantity}", reply_markup=diary_actions_kb)
-    else:
-        await message.answer("❌ Нет записи для изменения.", reply_markup=diary_actions_kb)
-    await state.clear()
-
-@dp.message(lambda msg: msg.text == "🗑 Удалить последнюю запись (питание)")
-async def delete_last_diary_entry(message: types.Message):
-    user_id = str(message.from_user.id)
-    diary_ref = db.collection("users").document(user_id).collection("diary")
-    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
-    deleted = False
-    for doc in docs:
-        doc.reference.delete()
-        deleted = True
-        break
-    if deleted:
-        await message.answer("🗑 Последняя запись удалена.", reply_markup=diary_actions_kb)
-    else:
-        await message.answer("❌ Нет записей для удаления.", reply_markup=diary_actions_kb)
-
-@dp.message(lambda msg: msg.text == "📌 Последние записи (питание)")
-async def last_diary_entries(message: types.Message):
-    user_id = str(message.from_user.id)
-    diary_ref = db.collection("users").document(user_id).collection("diary")
-    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(3).stream()
-    entries = [doc.to_dict() for doc in docs]
-    if entries:
-        text = "📌 Твои последние записи:\n"
-        for entry in entries:
-            timestamp = entry.get("timestamp")
-            date_str = timestamp.strftime('%d.%m.%Y %H:%M') if isinstance(timestamp, datetime) else "N/A"
-            meal = entry.get("meal", "N/A")
-            quantity = entry.get("quantity", "N/A")
-            text += f"• {meal} - {quantity} ({date_str})\n"
-        await message.answer(text, reply_markup=diary_actions_kb)
-    else:
-        await message.answer("❌ У тебя пока нет записей о питании.", reply_markup=diary_actions_kb)
-
-# =========================================
-# 12. Хендлеры для раздела "Мой прогресс"
+# 11. Хендлер для раздела "Мой прогресс"
 # =========================================
 
 @dp.message(lambda msg: msg.text == "📊 Мой прогресс")
 async def open_progress_menu(message: types.Message):
     await message.answer("📊 Что хочешь сделать в разделе прогресса?", reply_markup=progress_actions_kb)
+
+# Кнопка "📌 Мои параметры" – отображение текущих параметров и последних до 7 записей
+@dp.message(lambda msg: msg.text == "📌 Мои параметры")
+async def handle_my_params(message: types.Message):
+    user_id = str(message.from_user.id)
+    doc = db.collection("users").document(user_id).get()
+    data = doc.to_dict() if doc.exists else {}
+    params = data.get("params", {})
+    # Если массив истории прогресса уже сохранён в основном документе, используем его,
+    # иначе пытаемся получить последнюю запись из подколлекции.
+    progress_history = data.get("progress_history", [])
+    if progress_history:
+        # Формируем текст для последних записей
+        entries_text = "\n".join([
+            f"• Вес: {entry.get('weight', 'N/A')} кг, Обхваты: {entry.get('measurements', 'не указаны')} ({entry.get('timestamp_str', 'N/A')})"
+            for entry in progress_history
+        ])
+    else:
+        entries_text = "Нет записей."
+    response_text = (
+        "📌 **Твои текущие параметры:**\n"
+        f"• Пол: {params.get('пол', 'N/A')}\n"
+        f"• Вес: {params.get('вес', 'N/A')} кг\n"
+        f"• Обхваты: {params.get('обхваты', 'не указаны')}\n"
+        f"• Возраст: {params.get('возраст', 'N/A')}\n"
+        f"• Здоровье: {params.get('здоровье', 'N/A')}\n"
+        f"• Цель: {params.get('цель', 'N/A')}\n"
+        f"• Активность: {params.get('активность', 'N/A')}\n\n"
+        "📌 **Последние показатели (до 7 записей):**\n" + entries_text
+    )
+    await message.answer(response_text, parse_mode=ParseMode.MARKDOWN, reply_markup=progress_actions_kb)
+
+# Кнопка "📌 Последние показатели (прогресс)" – получаем последние 7 записей
+@dp.message(lambda msg: msg.text == "📌 Последние показатели (прогресс)")
+async def last_progress_entry(message: types.Message):
+    user_id = str(message.from_user.id)
+    progress_ref = db.collection("users").document(user_id).collection("progress")
+    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(7).stream()
+    entries = []
+    for doc in docs:
+        data = doc.to_dict()
+        if isinstance(data.get("timestamp"), datetime):
+            data["timestamp_str"] = data["timestamp"].strftime("%d.%m.%Y %H:%M")
+        else:
+            data["timestamp_str"] = "N/A"
+        entries.append(data)
+    if entries:
+        # Обновляем основной документ с историей прогресса
+        db.collection("users").document(user_id).update({"progress_history": entries})
+        text = "📌 Твои последние показатели:\n"
+        for entry in entries:
+            text += f"• Вес: {entry.get('weight', 'не указан')} кг, Обхваты: {entry.get('measurements', 'не указаны')} ({entry.get('timestamp_str')})\n"
+        await message.answer(text, reply_markup=progress_actions_kb)
+    else:
+        await message.answer("❌ У тебя пока нет записей.", reply_markup=progress_actions_kb)
 
 @dp.message(lambda msg: msg.text == "✅ Добавить запись (прогресс)")
 async def add_progress_entry(message: types.Message, state: FSMContext):
@@ -626,8 +561,9 @@ async def process_progress_measurements(message: types.Message, state: FSMContex
     }
     user_id = str(message.from_user.id)
     db.collection("users").document(user_id).collection("progress").add(entry)
-    # Обновляем вес в основных параметрах пользователя
+    # Обновляем основной документ с весом и обхватами
     db.collection("users").document(user_id).update({"params.weight": weight})
+    await update_progress_history(user_id)
     await message.answer(
         f"✅ Записал твои показатели:\n🗓 {timestamp.strftime('%d.%m.%Y %H:%M')}\n⚖️ Вес: {weight} кг\n📏 Обхваты: {entry['measurements']}",
         reply_markup=progress_actions_kb
@@ -682,8 +618,8 @@ async def update_progress_measurements(message: types.Message, state: FSMContext
         updated = True
         break
     if updated:
-        # Также обновляем основной вес пользователя:
         db.collection("users").document(user_id).update({"params.weight": new_weight})
+        await update_progress_history(user_id)
         await message.answer(f"✅ Запись изменена на:\n⚖️ Вес: {new_weight} кг\n📏 Обхваты: {new_measurements}", reply_markup=progress_actions_kb)
     else:
         await message.answer("❌ Нет записи для изменения.", reply_markup=progress_actions_kb)
@@ -700,6 +636,7 @@ async def delete_last_progress_entry(message: types.Message):
         deleted = True
         break
     if deleted:
+        await update_progress_history(user_id)
         await message.answer("🗑 Последняя запись удалена.", reply_markup=progress_actions_kb)
     else:
         await message.answer("❌ Нет записей для удаления.", reply_markup=progress_actions_kb)
@@ -707,28 +644,19 @@ async def delete_last_progress_entry(message: types.Message):
 @dp.message(lambda msg: msg.text == "📌 Последние показатели (прогресс)")
 async def last_progress_entry(message: types.Message):
     user_id = str(message.from_user.id)
-    progress_ref = db.collection("users").document(user_id).collection("progress")
-    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
-    last_entry = None
-    for doc in docs:
-        last_entry = doc.to_dict()
-        break
-    if last_entry:
-        timestamp = last_entry.get("timestamp")
-        date_str = timestamp.strftime("%d.%m.%Y %H:%M") if isinstance(timestamp, datetime) else "N/A"
-        measurements = last_entry.get("measurements", "не указаны")
-        await message.answer(
-            f"📌 Твои последние показатели:\n"
-            f"• Вес: {last_entry.get('weight', 'не указан')} кг\n"
-            f"• Обхваты: {measurements}\n"
-            f"• Дата: {date_str}",
-            reply_markup=progress_actions_kb
-        )
+    doc = db.collection("users").document(user_id).get()
+    data = doc.to_dict() if doc.exists else {}
+    progress_history = data.get("progress_history", [])
+    if progress_history:
+        text = "📌 Твои последние показатели:\n"
+        for entry in progress_history:
+            text += f"• Вес: {entry.get('weight', 'не указан')} кг, Обхваты: {entry.get('measurements', 'не указаны')} ({entry.get('timestamp_str', 'N/A')})\n"
+        await message.answer(text, reply_markup=progress_actions_kb)
     else:
         await message.answer("❌ У тебя пока нет записей.", reply_markup=progress_actions_kb)
 
 # =========================================
-# 13. Хендлеры для других разделов
+# 13. Хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
 # =========================================
 
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
