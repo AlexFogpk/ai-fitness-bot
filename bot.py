@@ -45,7 +45,7 @@ db = firestore.client()
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # =========================================
-# 4. (Удалено) Инициализация NLP-модели (rubert-tiny2) и функция nlp_is_fitness_topic
+# 4. (Удалено) Инициализация NLP-модели и функция nlp_is_fitness_topic
 # =========================================
 
 # =========================================
@@ -99,7 +99,7 @@ activity_kb = ReplyKeyboardMarkup(
 btn_cancel = KeyboardButton(text="🔙 Отмена")
 cancel_kb = ReplyKeyboardMarkup(keyboard=[[btn_cancel]], resize_keyboard=True)
 
-# Клавиатура для раздела "Дневник питания":
+# Клавиатура для Дневника питания:
 diary_actions_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Добавить запись (питание)")],
@@ -294,6 +294,20 @@ async def update_history(user_id: str, role: str, text: str):
     history = history[-5:]
     user_ref.update({"history": history})
 
+# Обновляем progress_history (до 7 последних записей)
+async def update_progress_history(user_id: str):
+    progress_ref = db.collection("users").document(user_id).collection("progress")
+    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(7).stream()
+    history = []
+    for doc in docs:
+        data = doc.to_dict()
+        if isinstance(data.get("timestamp"), datetime):
+            data["timestamp_str"] = data["timestamp"].strftime("%d.%m.%Y %H:%M")
+        else:
+            data["timestamp_str"] = "N/A"
+        history.append(data)
+    db.collection("users").document(user_id).update({"progress_history": history})
+
 async def ask_gpt(user_id: str, user_message: str) -> str:
     doc = db.collection("users").document(user_id).get()
     user_data = doc.to_dict() if doc.exists else {}
@@ -336,21 +350,6 @@ async def ask_gpt(user_id: str, user_message: str) -> str:
         max_tokens=1000
     )
     return response.choices[0].message.content
-
-# Обновляем массив последних 7 записей прогресса в основном документе
-async def update_progress_history(user_id: str):
-    progress_ref = db.collection("users").document(user_id).collection("progress")
-    docs = progress_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(7).stream()
-    history = []
-    for doc in docs:
-        data = doc.to_dict()
-        if isinstance(data.get("timestamp"), datetime):
-            data["timestamp_str"] = data["timestamp"].strftime("%d.%m.%Y %H:%M")
-        else:
-            data["timestamp_str"] = "N/A"
-        history.append(data)
-    # Обновляем основной документ
-    db.collection("users").document(user_id).update({"progress_history": history})
 
 # =========================================
 # 9. Хендлеры приветствий и стартовая команда
@@ -467,27 +466,25 @@ async def handle_calculate_kbju(message: types.Message):
     await message.answer(response_text)
 
 # =========================================
-# 11. Хендлер для раздела "Мой прогресс"
+# 11. Хендлеры для раздела "Мой прогресс"
 # =========================================
 
 @dp.message(lambda msg: msg.text == "📊 Мой прогресс")
 async def open_progress_menu(message: types.Message):
     await message.answer("📊 Что хочешь сделать в разделе прогресса?", reply_markup=progress_actions_kb)
 
-# Кнопка "📌 Мои параметры" – отображение текущих параметров и последних до 7 записей
+# Кнопка "📌 Мои параметры" – выводит параметры из основного документа и последние показатели (progress_history)
 @dp.message(lambda msg: msg.text == "📌 Мои параметры")
 async def handle_my_params(message: types.Message):
     user_id = str(message.from_user.id)
     doc = db.collection("users").document(user_id).get()
     data = doc.to_dict() if doc.exists else {}
     params = data.get("params", {})
-    # Если массив истории прогресса уже сохранён в основном документе, используем его,
-    # иначе пытаемся получить последнюю запись из подколлекции.
+    # Если progress_history есть, используем его, иначе выводим "нет записей"
     progress_history = data.get("progress_history", [])
     if progress_history:
-        # Формируем текст для последних записей
         entries_text = "\n".join([
-            f"• Вес: {entry.get('weight', 'N/A')} кг, Обхваты: {entry.get('measurements', 'не указаны')} ({entry.get('timestamp_str', 'N/A')})"
+            f"• Вес: {entry.get('weight', 'не указан')} кг, Обхваты: {entry.get('measurements', 'не указаны')} ({entry.get('timestamp_str', 'N/A')})"
             for entry in progress_history
         ])
     else:
@@ -505,7 +502,7 @@ async def handle_my_params(message: types.Message):
     )
     await message.answer(response_text, parse_mode=ParseMode.MARKDOWN, reply_markup=progress_actions_kb)
 
-# Кнопка "📌 Последние показатели (прогресс)" – получаем последние 7 записей
+# Кнопка "📌 Последние показатели (прогресс)" – получаем последние 7 записей из подколлекции
 @dp.message(lambda msg: msg.text == "📌 Последние показатели (прогресс)")
 async def last_progress_entry(message: types.Message):
     user_id = str(message.from_user.id)
@@ -520,7 +517,7 @@ async def last_progress_entry(message: types.Message):
             data["timestamp_str"] = "N/A"
         entries.append(data)
     if entries:
-        # Обновляем основной документ с историей прогресса
+        # Обновляем progress_history в основном документе
         db.collection("users").document(user_id).update({"progress_history": entries})
         text = "📌 Твои последние показатели:\n"
         for entry in entries:
@@ -561,7 +558,7 @@ async def process_progress_measurements(message: types.Message, state: FSMContex
     }
     user_id = str(message.from_user.id)
     db.collection("users").document(user_id).collection("progress").add(entry)
-    # Обновляем основной документ с весом и обхватами
+    # Обновляем вес в основном документе
     db.collection("users").document(user_id).update({"params.weight": weight})
     await update_progress_history(user_id)
     await message.answer(
@@ -641,22 +638,8 @@ async def delete_last_progress_entry(message: types.Message):
     else:
         await message.answer("❌ Нет записей для удаления.", reply_markup=progress_actions_kb)
 
-@dp.message(lambda msg: msg.text == "📌 Последние показатели (прогресс)")
-async def last_progress_entry(message: types.Message):
-    user_id = str(message.from_user.id)
-    doc = db.collection("users").document(user_id).get()
-    data = doc.to_dict() if doc.exists else {}
-    progress_history = data.get("progress_history", [])
-    if progress_history:
-        text = "📌 Твои последние показатели:\n"
-        for entry in progress_history:
-            text += f"• Вес: {entry.get('weight', 'не указан')} кг, Обхваты: {entry.get('measurements', 'не указаны')} ({entry.get('timestamp_str', 'N/A')})\n"
-        await message.answer(text, reply_markup=progress_actions_kb)
-    else:
-        await message.answer("❌ У тебя пока нет записей.", reply_markup=progress_actions_kb)
-
 # =========================================
-# 13. Хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
+# 12. Хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
 # =========================================
 
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
@@ -692,7 +675,7 @@ async def handle_subscription(message: types.Message):
     )
 
 # =========================================
-# 14. Онбординг – сбор параметров
+# 13. Онбординг – сбор параметров
 # =========================================
 
 @dp.message(Onboarding.waiting_for_gender)
@@ -774,7 +757,7 @@ async def process_activity(message: types.Message, state: FSMContext):
     await state.clear()
 
 # =========================================
-# 15. Обновление цели через текстовую фразу
+# 14. Обновление цели через текстовую фразу
 # =========================================
 
 @dp.message(lambda msg: "поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower())
@@ -790,7 +773,7 @@ async def update_goal(message: types.Message):
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
 # =========================================
-# 16. Общий fallback-хендлер
+# 15. Общий fallback-хендлер
 # =========================================
 
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
@@ -822,7 +805,7 @@ async def handle_message(message: types.Message):
     await update_history(user_id, "bot", response)
 
 # =========================================
-# 17. Точка входа
+# 16. Точка входа
 # =========================================
 
 async def main():
