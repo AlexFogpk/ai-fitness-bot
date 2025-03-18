@@ -225,7 +225,7 @@ async def is_fitness_question_combined(user_id: str, text: str) -> bool:
         return True
     if is_topic_by_regex(text):
         return True
-    # Удалена проверка с помощью NLP-модели
+    # Проверка через GPT fallback
     return await is_topic_by_gpt(user_id, text)
 
 # =========================================
@@ -372,7 +372,7 @@ async def start(message: types.Message, state: FSMContext):
 # 20. Логика для кнопок меню
 #########################
 
-# 20.1. Изменить данные – повторный опрос
+# Обработчик для кнопки "📝 Изменить данные"
 @dp.message(lambda msg: msg.text == "📝 Изменить данные")
 async def handle_change_data(message: types.Message, state: FSMContext):
     await message.answer(
@@ -382,7 +382,7 @@ async def handle_change_data(message: types.Message, state: FSMContext):
     )
     await state.set_state(Onboarding.waiting_for_gender)
 
-# 20.2. Изменить цель – запуск короткого FSM для ввода новой цели
+# Обработчик для кнопки "🎯 Изменить цель"
 @dp.message(lambda msg: msg.text == "🎯 Изменить цель")
 async def handle_change_goal_button(message: types.Message, state: FSMContext):
     await message.answer("Окей! Введи, пожалуйста, новую цель (например: похудение, набор массы и т.д.)")
@@ -396,7 +396,7 @@ async def process_new_goal(message: types.Message, state: FSMContext):
     await message.answer(f"Цель обновлена на: *{new_goal}*", parse_mode=ParseMode.MARKDOWN)
     await state.clear()
 
-# 20.3. Посчитать КБЖУ – расчет калорий и макронутриентов с учётом активности и цели
+# Обработчик для кнопки "🍽 Посчитать КБЖУ"
 @dp.message(lambda msg: msg.text == "🍽 Посчитать КБЖУ")
 async def handle_calculate_kbju(message: types.Message):
     user_id = str(message.from_user.id)
@@ -464,9 +464,60 @@ async def handle_calculate_kbju(message: types.Message):
     )
     await message.answer(response_text)
 
-#########################
+# Новые обработчики для дополнительных кнопок:
+
+# 📊 Мой прогресс
+@dp.message(lambda msg: msg.text == "📊 Мой прогресс")
+async def handle_my_progress(message: types.Message):
+    await message.answer("Функция отслеживания прогресса скоро будет доступна! 🚧")
+
+# 📒 Дневник питания
+@dp.message(lambda msg: msg.text == "📒 Дневник питания")
+async def handle_food_diary(message: types.Message):
+    await message.answer("Здесь скоро появится твой дневник питания! 📒🍏")
+
+# 🏋️ Планы тренировок
+@dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
+async def handle_training_plans(message: types.Message):
+    await message.answer("Скоро здесь будут твои персональные планы тренировок! 🏋️‍♂️📆")
+
+# 🔔 Настройки уведомлений
+@dp.message(lambda msg: msg.text == "🔔 Настройки уведомлений")
+async def handle_notifications(message: types.Message):
+    await message.answer("Настройки уведомлений скоро будут доступны! 🔔⚙️")
+
+# ❓ FAQ
+@dp.message(lambda msg: msg.text == "❓ FAQ")
+async def handle_faq(message: types.Message):
+    await message.answer(
+        "❓ **Часто задаваемые вопросы:**\n\n"
+        "• Как изменить данные? — Нажми 📝 «Изменить данные».\n"
+        "• Как обновить цель? — Нажми 🎯 «Изменить цель».\n"
+        "• Как посчитать КБЖУ? — Нажми 🍽 «Посчитать КБЖУ».\n\n"
+        "Остальные вопросы скоро появятся тут!"
+    )
+
+# 🛠 Техподдержка
+@dp.message(lambda msg: msg.text == "🛠 Техподдержка")
+async def handle_support(message: types.Message):
+    await message.answer(
+        "Если у тебя возникли проблемы или вопросы, напиши нам: @support_account"
+    )
+
+# 💎 Подписка
+@dp.message(lambda msg: msg.text == "💎 Подписка")
+async def handle_subscription(message: types.Message):
+    user_id = str(message.from_user.id)
+    doc = db.collection("users").document(user_id).get()
+    subscription_status = doc.to_dict().get("subscription", "free") if doc.exists else "free"
+    await message.answer(
+        f"Твой текущий статус подписки: *{subscription_status.upper()}* 💎\n\n"
+        "Скоро будет возможность оформить премиум-подписку с дополнительными возможностями!"
+    )
+
+# =========================================
 # 21. Сбор параметров пошагово (онбординг)
-#########################
+# =========================================
 @dp.message(Onboarding.waiting_for_gender)
 async def process_gender(message: types.Message, state: FSMContext):
     gender = message.text.strip()
