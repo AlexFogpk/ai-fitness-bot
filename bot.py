@@ -643,9 +643,139 @@ async def delete_last_progress_entry(message: types.Message):
         await message.answer("🗑 Последняя запись удалена.", reply_markup=progress_actions_kb)
     else:
         await message.answer("❌ Нет записей для удаления.", reply_markup=progress_actions_kb)
+        
+# =========================================
+# 12. Хендлеры для раздела "Дневник питания"
+# =========================================
+
+@dp.message(lambda msg: msg.text == "📒 Дневник питания")
+async def diary_menu(message: types.Message):
+    await message.answer("📒 Что хочешь сделать в дневнике питания?", reply_markup=diary_actions_kb)
+
+# Добавить запись в дневник
+@dp.message(lambda msg: msg.text == "✅ Добавить запись (питание)")
+async def add_diary_entry(message: types.Message, state: FSMContext):
+    await message.answer("Введи название блюда:", reply_markup=cancel_kb)
+    await state.set_state(DiaryEntry.waiting_for_meal)
+
+@dp.message(DiaryEntry.waiting_for_meal)
+async def diary_meal(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Добавление отменено.", reply_markup=diary_actions_kb)
+        await state.clear()
+        return
+    await state.update_data(meal=message.text.strip())
+    await message.answer("Теперь введи количество (например, 100 г):", reply_markup=cancel_kb)
+    await state.set_state(DiaryEntry.waiting_for_quantity)
+
+@dp.message(DiaryEntry.waiting_for_quantity)
+async def diary_quantity(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Добавление отменено.", reply_markup=diary_actions_kb)
+        await state.clear()
+        return
+    data = await state.get_data()
+    meal = data.get("meal")
+    quantity = message.text.strip()
+    timestamp = datetime.now()
+
+    entry = {
+        "meal": meal,
+        "quantity": quantity,
+        "timestamp": timestamp
+    }
+    user_id = str(message.from_user.id)
+    db.collection("users").document(user_id).collection("diary").add(entry)
+    await message.answer(
+        f"✅ Запись добавлена:\n• {meal}, {quantity}",
+        reply_markup=diary_actions_kb
+    )
+    await state.clear()
+
+# Последние записи в дневнике
+@dp.message(lambda msg: msg.text == "📌 Последние записи (питание)")
+async def last_diary_entries(message: types.Message):
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(7).stream()
+    entries = []
+    for doc in docs:
+        data = doc.to_dict()
+        timestamp_str = data["timestamp"].strftime("%d.%m.%Y %H:%M")
+        entries.append(f"• {data['meal']} - {data['quantity']} ({timestamp_str})")
+
+    if entries:
+        await message.answer("📌 Твои последние записи:\n" + "\n".join(entries), reply_markup=diary_actions_kb)
+    else:
+        await message.answer("❌ У тебя пока нет записей.", reply_markup=diary_actions_kb)
+
+# Удаление последней записи
+@dp.message(lambda msg: msg.text == "🗑 Удалить последнюю запись (питание)")
+async def delete_last_diary_entry(message: types.Message):
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+
+    deleted = False
+    for doc in docs:
+        doc.reference.delete()
+        deleted = True
+        break
+    if deleted:
+        await message.answer("🗑 Последняя запись удалена.", reply_markup=diary_actions_kb)
+    else:
+        await message.answer("❌ Нет записей для удаления.", reply_markup=diary_actions_kb)
+
+# Изменение последней записи
+@dp.message(lambda msg: msg.text == "✏️ Изменить последнюю запись (питание)")
+async def edit_last_diary_entry(message: types.Message, state: FSMContext):
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(1).stream()
+
+    last_entry = None
+    for doc in docs:
+        last_entry = doc
+        break
+
+    if last_entry:
+        await state.update_data(last_doc_id=last_entry.id)
+        await message.answer("Введи новое название блюда:", reply_markup=cancel_kb)
+        await state.set_state(DiaryEdit.waiting_for_new_meal)
+    else:
+        await message.answer("❌ Нет записей для изменения.", reply_markup=diary_actions_kb)
+
+@dp.message(DiaryEdit.waiting_for_new_meal)
+async def diary_edit_meal(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Редактирование отменено.", reply_markup=diary_actions_kb)
+        await state.clear()
+        return
+    await state.update_data(new_meal=message.text.strip())
+    await message.answer("Теперь введи новое количество:", reply_markup=cancel_kb)
+    await state.set_state(DiaryEdit.waiting_for_new_quantity)
+
+@dp.message(DiaryEdit.waiting_for_new_quantity)
+async def diary_edit_quantity(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Отмена":
+        await message.answer("Редактирование отменено.", reply_markup=diary_actions_kb)
+        await state.clear()
+        return
+    data = await state.get_data()
+    new_meal = data.get("new_meal")
+    new_quantity = message.text.strip()
+    user_id = str(message.from_user.id)
+    diary_ref = db.collection("users").document(user_id).collection("diary")
+    diary_ref.document(data["last_doc_id"]).update({
+        "meal": new_meal,
+        "quantity": new_quantity,
+        "timestamp": datetime.now()
+    })
+    await message.answer(f"✅ Запись изменена на:\n• {new_meal}, {new_quantity}", reply_markup=diary_actions_kb)
+    await state.clear()
 
 # =========================================
-# 12. Хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
+# 13. Хендлеры для разделов "Планы тренировок", "Настройки уведомлений", "FAQ", "Техподдержка", "Подписка"
 # =========================================
 
 @dp.message(lambda msg: msg.text == "🏋️ Планы тренировок")
@@ -681,7 +811,7 @@ async def handle_subscription(message: types.Message):
     )
 
 # =========================================
-# 13. Онбординг – сбор параметров
+# 14. Онбординг – сбор параметров
 # =========================================
 
 @dp.message(Onboarding.waiting_for_gender)
@@ -763,7 +893,7 @@ async def process_activity(message: types.Message, state: FSMContext):
     await state.clear()
 
 # =========================================
-# 14. Обновление цели через текстовую фразу
+# 15. Обновление цели через текстовую фразу
 # =========================================
 
 @dp.message(lambda msg: "поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower())
@@ -779,7 +909,7 @@ async def update_goal(message: types.Message):
     await message.answer("Пожалуйста, укажи новую цель после фразы 'поменяй мою цель на'.", parse_mode=ParseMode.MARKDOWN)
 
 # =========================================
-# 15. Общий fallback-хендлер
+# 16. Общий fallback-хендлер
 # =========================================
 
 @dp.message(lambda msg: not ("поменяй мою цель" in msg.text.lower() or "измени мою цель" in msg.text.lower()))
@@ -811,7 +941,7 @@ async def handle_message(message: types.Message):
     await update_history(user_id, "bot", response)
 
 # =========================================
-# 16. Точка входа
+# 17. Точка входа
 # =========================================
 
 async def main():
