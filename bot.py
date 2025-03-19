@@ -678,29 +678,43 @@ async def delete_last_progress_entry(message: types.Message):
 
 # =========================================
 # 12. Хендлеры для раздела "Дневник питания"
-# (старый вариант для вывода записей остаётся без изменений)
 # =========================================
 
 @dp.message(lambda msg: msg.text == "📒 Дневник питания")
 async def diary_menu(message: types.Message):
     await message.answer("📒 Что хочешь сделать в дневнике питания?", reply_markup=diary_actions_kb)
 
+# Обработчик для вывода последних записей (сортировка по типам приёмов пищи)
+meal_order = ["завтрак", "обед", "ужин", "перекус"]
+
 @dp.message(lambda msg: msg.text == "📌 Последние записи (питание)")
 async def last_diary_entries(message: types.Message):
     user_id = str(message.from_user.id)
     diary_ref = db.collection("users").document(user_id).collection("diary")
-    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(7).stream()
-    entries = []
+    docs = diary_ref.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(20).stream()
+    
+    categorized_entries = {"завтрак": [], "обед": [], "ужин": [], "перекус": []}
+    
     for doc in docs:
         data = doc.to_dict()
         timestamp_str = data["timestamp"].strftime("%d.%m.%Y %H:%M")
-        entries.append(f"• {data['meal_name']} - {data['quantity']} ({timestamp_str})")
-    if entries:
-        await message.answer("📌 Твои последние записи:\n" + "\n".join(entries), reply_markup=diary_actions_kb)
+        meal_type = data.get("meal_type", "перекус")
+        entry_text = f"• {data['meal_name']} - {data['quantity']} ({timestamp_str})"
+        if meal_type in categorized_entries:
+            categorized_entries[meal_type].append(entry_text)
+        else:
+            categorized_entries["перекус"].append(entry_text)  # По умолчанию
+
+    response_parts = []
+    for meal in meal_order:
+        if categorized_entries[meal]:
+            entries_text = "\n".join(categorized_entries[meal])
+            response_parts.append(f"🍽 **{meal.capitalize()}**:\n{entries_text}")
+
+    if response_parts:
+        await message.answer("\n\n".join(response_parts), parse_mode=ParseMode.MARKDOWN, reply_markup=diary_actions_kb)
     else:
         await message.answer("❌ У тебя пока нет записей.", reply_markup=diary_actions_kb)
-
-# *** Новые обработчики для добавления, изменения и удаления записей дневника питания ***
 
 # Добавление записи (питание)
 @dp.message(lambda msg: msg.text == "✅ Добавить запись (питание)")
@@ -802,6 +816,7 @@ async def choose_field_to_edit(message: types.Message, state: FSMContext):
     await message.answer("Введи новое значение для изменения:", reply_markup=cancel_kb)
     await state.set_state(DiaryEdit.waiting_for_new_value)
 
+# Исправленный обработчик для редактирования записи (без лишних деталей)
 @dp.message(DiaryEdit.waiting_for_new_value)
 async def process_new_value(message: types.Message, state: FSMContext):
     if message.text == "🔙 Отмена":
@@ -817,7 +832,7 @@ async def process_new_value(message: types.Message, state: FSMContext):
         field_to_edit: new_value,
         "timestamp": datetime.now()
     })
-    await message.answer(f"✅ Запись обновлена: {field_to_edit} изменено на {new_value}", reply_markup=diary_actions_kb)
+    await message.answer("✅ Запись успешно обновлена.", reply_markup=diary_actions_kb)
     await state.clear()
 
 # Удаление последней записи (питание)
