@@ -484,7 +484,7 @@ async def handle_my_params(message: types.Message):
     progress_history = data.get("progress_history", [])
     if progress_history:
         entries_text = "\n".join([
-            f"• Вес: {entry.get('weight', 'не указан')} кг, Обхваты: {entry.get('measurements', 'не указаны')} ({entry.get('timestamp_str', 'N/A')})"
+            f"• Вес: {entry.get('weight', 'не указан')} кг, Обхваты: {entry.get('measurements', 'не указаны') if entry.get('measurements') != 'не указаны' else 'не указаны'} ({entry.get('timestamp_str', 'N/A')})"
             for entry in progress_history
         ])
     else:
@@ -493,7 +493,7 @@ async def handle_my_params(message: types.Message):
         "📌 **Твои текущие параметры:**\n"
         f"• Пол: {params.get('пол', 'N/A')}\n"
         f"• Вес: {params.get('вес', 'N/A')} кг\n"
-        f"• Обхваты: {params.get('обхваты', 'не указаны')}\n"
+        f"• Рост: {params.get('рост', 'N/A')} см\n"
         f"• Возраст: {params.get('возраст', 'N/A')}\n"
         f"• Здоровье: {params.get('здоровье', 'N/A')}\n"
         f"• Цель: {params.get('цель', 'N/A')}\n"
@@ -521,7 +521,7 @@ async def last_progress_entry(message: types.Message):
         db.collection("users").document(user_id).update({"progress_history": entries})
         text = "📌 Твои последние показатели:\n"
         for entry in entries:
-            text += f"• Вес: {entry.get('weight', 'не указан')} кг, Обхваты: {entry.get('measurements', 'не указаны')} ({entry.get('timestamp_str')})\n"
+            text += f"• Вес: {entry.get('weight', 'не указан')} кг, Обхваты: {entry.get('measurements', 'не указаны') if entry.get('measurements') != 'не указаны' else 'не указаны'} ({entry.get('timestamp_str')})\n"
         await message.answer(text, reply_markup=progress_actions_kb)
     else:
         await message.answer("❌ У тебя пока нет записей.", reply_markup=progress_actions_kb)
@@ -558,8 +558,8 @@ async def process_progress_measurements(message: types.Message, state: FSMContex
     }
     user_id = str(message.from_user.id)
     db.collection("users").document(user_id).collection("progress").add(entry)
-    # Обновляем вес в основном документе
-    db.collection("users").document(user_id).update({"params.weight": weight})
+    # Обновляем вес в основном документе (изменено с params.weight на params.вес)
+    db.collection("users").document(user_id).update({"params.вес": weight})
     await update_progress_history(user_id)
     await message.answer(
         f"✅ Записал твои показатели:\n🗓 {timestamp.strftime('%d.%m.%Y %H:%M')}\n⚖️ Вес: {weight} кг\n📏 Обхваты: {entry['measurements']}",
@@ -615,7 +615,7 @@ async def update_progress_measurements(message: types.Message, state: FSMContext
         updated = True
         break
     if updated:
-        db.collection("users").document(user_id).update({"params.weight": new_weight})
+        db.collection("users").document(user_id).update({"params.вес": new_weight})
         await update_progress_history(user_id)
         await message.answer(f"✅ Запись изменена на:\n⚖️ Вес: {new_weight} кг\n📏 Обхваты: {new_measurements}", reply_markup=progress_actions_kb)
     else:
@@ -745,7 +745,7 @@ async def process_activity(message: types.Message, state: FSMContext):
         "Отлично! Я записал твои параметры:\n"
         f"• Пол: {data.get('gender')}\n"
         f"• Вес: {data.get('weight')}\n"
-        f"• Рост: {data.get('height')}\n"
+        f"• Рост: {data.get('рост', 'N/A')} см\n"
         f"• Возраст: {data.get('age')}\n"
         f"• Здоровье: {data.get('health')}\n"
         f"• Цель: {data.get('goal')}\n"
