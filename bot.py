@@ -465,6 +465,12 @@ async def handle_calculate_kbju(message: types.Message):
     )
     await message.answer(response_text)
 
+# Новый обработчик для кнопки "🔙 В главное меню"
+@dp.message(lambda msg: msg.text == "🔙 В главное меню")
+async def back_to_main_menu(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🔙 Ты вернулся в главное меню.", reply_markup=main_menu_kb)
+
 # =========================================
 # 11. Хендлеры для раздела "Мой прогресс"
 # =========================================
